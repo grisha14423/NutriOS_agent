@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+
+# Generated application output
+data/profile.md
+data/log.md
+data/output.md
+dist/
+coverage/
+.next/
+
+# TypeScript and tooling caches
+*.tsbuildinfo
+.eslintcache
+
+# Operating system files
+.DS_Store
+Thumbs.db
