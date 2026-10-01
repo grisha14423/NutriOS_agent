@@ -27,9 +27,12 @@ npm run start
 
 - `app/page.tsx`: клиентский интерфейс с состояниями idle, running и result.
 - `app/api/agent/run/route.ts`: POST-эндпоинт, принимающий `{ task }`.
-- `src/harness/runHealthAgent.ts`: оркестрация agent loop до трёх раундов.
-- `src/agents/healthCoach.ts`: промпт и вызов Health Coach.
-- `src/agents/safetyReviewer.ts`: промпт, Zod-проверка JSON и повторный запрос при невалидном JSON.
+- `src/harness/runHealthAgent.ts`: оркестрация agent loop, по умолчанию до трёх раундов.
+- `src/harness/validateReview.ts`: Zod-проверка JSON reviewer-а и один повторный запрос.
+- `src/harness/rounds.ts`: состояние и история раундов.
+- `src/harness/score.ts`: итоговая оценка и изменение оценки между раундами.
+- `src/harness/promptVersions.ts`: активные версии и загрузка промптов из `prompts/`.
+- `src/agents/healthCoach.ts` и `src/agents/safetyReviewer.ts`: вызовы агентов.
 - `data/profile.md` и `data/log.md`: входной контекст агента.
 - `data/output.md`: сохранённый одобренный план.
 
@@ -39,8 +42,8 @@ npm run start
 2. Health Coach создаёт план через OpenRouter Responses API.
 3. Safety Reviewer проверяет план.
 4. При `revise` coach получает замечания и переписывает план. Всего не более трёх раундов.
-5. При `approve` план записывается в `data/output.md`.
-6. При `needs_human_professional` план не возвращается в UI.
+5. При `approve` и оценке не ниже 7/10 план записывается в `data/output.md` и возвращается в UI.
+6. При низкой оценке, отсутствии одобрения после всех раундов или `needs_human_professional` план не возвращается в UI.
 
 Не меняйте промпты, medical regex, `store: false` или правила revision loop без явного запроса.
 OpenRouter stateless: полный нужный контекст передаётся в каждом вызове, `previous_response_id` не используется.

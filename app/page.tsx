@@ -17,12 +17,19 @@ import { Textarea } from "@/components/ui/textarea";
 
 type AgentResult = {
   plan: string;
-  review: {
-    verdict: "approve" | "revise" | "needs_human_professional";
-    score: number;
-    issues: string[];
-  };
-  rounds: number;
+  review: Review;
+  blockedReason: string | null;
+  rounds: { round: number; plan: string; review: Review }[];
+  finalScore: number | null;
+  improved: boolean;
+  promptVersions: { coach: string; reviewer: string };
+  durationMs: number;
+};
+
+type Review = {
+  verdict: "approve" | "revise" | "needs_human_professional";
+  score: number;
+  issues: string[];
 };
 
 const verdictLabels = {
@@ -153,10 +160,20 @@ export default function Home() {
             <Alert className="flex gap-3 border-amber-700/30 bg-amber-50 text-amber-950">
               <AlertCircle aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-amber-700" />
               <div>
-                <p className="font-semibold">Этот запрос требует консультации специалиста</p>
+                <p className="font-semibold">Для этого запроса требуется вмешательство человека</p>
                 <p className="mt-1 text-sm leading-6">
                   Агент не показывает план для запросов, связанных с медицинской помощью.
                 </p>
+              </div>
+            </Alert>
+          )}
+
+          {result?.blockedReason && (
+            <Alert className="flex gap-3 border-amber-700/30 bg-amber-50 text-amber-950">
+              <AlertCircle aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-amber-700" />
+              <div>
+                <p className="font-semibold">План не выдан</p>
+                <p className="mt-1 text-sm leading-6">{result.blockedReason}</p>
               </div>
             </Alert>
           )}
@@ -170,23 +187,23 @@ export default function Home() {
                 </div>
                 <Badge
                   className={
-                    needsProfessional
+                    needsProfessional || result.blockedReason
                       ? "border-amber-700/30 bg-amber-50 text-amber-900"
                       : result.review.verdict === "approve"
                         ? "border-primary/20 bg-primary/10 text-primary"
                         : "border-border bg-secondary text-secondary-foreground"
                   }
                 >
-                  {result.review.verdict === "approve" ? (
+                  {result.plan ? (
                     <CheckCircle2 aria-hidden="true" className="mr-1.5 size-3.5" />
                   ) : (
                     <ShieldCheck aria-hidden="true" className="mr-1.5 size-3.5" />
                   )}
-                  {verdictLabels[result.review.verdict]}
+                  {result.blockedReason ? "План не выдан" : verdictLabels[result.review.verdict]}
                 </Badge>
               </div>
 
-              {!needsProfessional && (
+              {result.plan && (
                 <Card>
                   <CardHeader>
                     <h3 className="text-lg font-semibold">Финальный план</h3>
@@ -211,10 +228,29 @@ export default function Home() {
                 <Card>
                   <CardContent className="p-5">
                     <p className="text-sm text-muted-foreground">Раундов проверки</p>
-                    <p className="mt-1 text-3xl font-bold tracking-tight text-foreground">{result.rounds}</p>
+                    <p className="mt-1 text-3xl font-bold tracking-tight text-foreground">{result.rounds.length}</p>
                   </CardContent>
                 </Card>
               </div>
+
+              <Card>
+                <CardContent className="space-y-3 p-5 text-sm text-muted-foreground">
+                  <p>Время выполнения: {result.durationMs} мс</p>
+                  <p>Версии промптов: coach {result.promptVersions.coach}, reviewer {result.promptVersions.reviewer}</p>
+                  <details>
+                    <summary className="w-fit cursor-pointer rounded-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                      История раундов
+                    </summary>
+                    <ol className="mt-3 space-y-2 pl-5 text-foreground">
+                      {result.rounds.map(({ round, review }) => (
+                        <li key={round}>
+                          Раунд {round} - {verdictLabels[review.verdict]} - {review.score}/10
+                        </li>
+                      ))}
+                    </ol>
+                  </details>
+                </CardContent>
+              </Card>
 
               <Card>
                 <CardHeader>
@@ -231,7 +267,9 @@ export default function Home() {
                       ))}
                     </ul>
                   ) : (
-                    <p className="text-sm leading-6 text-muted-foreground">Замечаний нет.</p>
+                    <p className="text-sm leading-6 text-muted-foreground">
+                      {result.blockedReason ? "Reviewer не указал конкретных замечаний." : "Замечаний нет."}
+                    </p>
                   )}
                 </CardContent>
               </Card>
