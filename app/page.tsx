@@ -20,10 +20,17 @@ type AgentResult = {
   review: Review;
   blockedReason: string | null;
   rounds: { round: number; plan: string; review: Review }[];
+  toolCalls: string[];
+  toolEvents: ToolDiagnostics["toolEvents"];
   finalScore: number | null;
   improved: boolean;
   promptVersions: { coach: string; reviewer: string };
   durationMs: number;
+};
+
+type ToolDiagnostics = {
+  toolCalls: string[];
+  toolEvents: { name: string; status: "ok" | "error"; durationMs: number }[];
 };
 
 type Review = {
@@ -43,6 +50,7 @@ export default function Home() {
   const [status, setStatus] = useState<"idle" | "running" | "result">("idle");
   const [result, setResult] = useState<AgentResult | null>(null);
   const [error, setError] = useState("");
+  const [errorDiagnostics, setErrorDiagnostics] = useState<ToolDiagnostics | null>(null);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -51,6 +59,7 @@ export default function Home() {
     setStatus("running");
     setResult(null);
     setError("");
+    setErrorDiagnostics(null);
 
     try {
       const response = await fetch("/api/agent/run", {
@@ -59,7 +68,13 @@ export default function Home() {
         body: JSON.stringify({ task }),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Не удалось запустить агента");
+      if (!response.ok) {
+        setErrorDiagnostics({
+          toolCalls: Array.isArray(data.toolCalls) ? data.toolCalls : [],
+          toolEvents: Array.isArray(data.toolEvents) ? data.toolEvents : [],
+        });
+        throw new Error(data.error || "Не удалось запустить агента");
+      }
       setResult(data);
     } catch (requestError) {
       setError(
@@ -152,31 +167,42 @@ export default function Home() {
               <div>
                 <p className="font-semibold">Не удалось выполнить задачу</p>
                 <p className="mt-1 text-sm leading-6">{error}</p>
+                {errorDiagnostics && errorDiagnostics.toolEvents.length > 0 && (
+                  <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm">
+                    {errorDiagnostics.toolEvents.map(({ name, status, durationMs }, index) => (
+                      <li key={`${index}-${name}`}>
+                        {name}: {status === "ok" ? "выполнен" : "ошибка"}, {durationMs} мс
+                      </li>
+                    ))}
+                  </ol>
+                )}
               </div>
             </Alert>
           )}
 
-          {needsProfessional && result && (
-            <Alert className="flex gap-3 border-amber-700/30 bg-amber-50 text-amber-950">
-              <AlertCircle aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-amber-700" />
-              <div>
-                <p className="font-semibold">Для этого запроса требуется вмешательство человека</p>
-                <p className="mt-1 text-sm leading-6">
-                  Агент не показывает план для запросов, связанных с медицинской помощью.
-                </p>
-              </div>
-            </Alert>
-          )}
+          <div className="space-y-3">
+            {needsProfessional && result && (
+              <Alert className="flex gap-3 border-amber-700/30 bg-amber-50 text-amber-950">
+                <AlertCircle aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-amber-700" />
+                <div>
+                  <p className="font-semibold">Для этого запроса требуется вмешательство человека</p>
+                  <p className="mt-1 text-sm leading-6">
+                    Агент не показывает план для запросов, связанных с медицинской помощью.
+                  </p>
+                </div>
+              </Alert>
+            )}
 
-          {result?.blockedReason && (
-            <Alert className="flex gap-3 border-amber-700/30 bg-amber-50 text-amber-950">
-              <AlertCircle aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-amber-700" />
-              <div>
-                <p className="font-semibold">План не выдан</p>
-                <p className="mt-1 text-sm leading-6">{result.blockedReason}</p>
-              </div>
-            </Alert>
-          )}
+            {result?.blockedReason && (
+              <Alert className="flex gap-3 border-amber-700/30 bg-amber-50 text-amber-950">
+                <AlertCircle aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-amber-700" />
+                <div>
+                  <p className="font-semibold">План не выдан</p>
+                  <p className="mt-1 text-sm leading-6">{result.blockedReason}</p>
+                </div>
+              </Alert>
+            )}
+          </div>
 
           {result && (
             <section className="mt-8 space-y-6" aria-labelledby="result-title">
@@ -215,6 +241,25 @@ export default function Home() {
                   </CardContent>
                 </Card>
               )}
+
+              <Card>
+                <CardHeader>
+                  <h3 className="text-lg font-semibold">Что сделал агент</h3>
+                </CardHeader>
+                <CardContent>
+                  {result.toolEvents.length ? (
+                    <ol className="list-decimal space-y-1 pl-5 text-sm text-foreground">
+                      {result.toolEvents.map(({ name, status, durationMs }, index) => (
+                        <li key={`${index}-${name}`}>
+                          {name}: {status === "ok" ? "выполнен" : "ошибка"}, {durationMs} мс
+                        </li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">Tools не вызывались.</p>
+                  )}
+                </CardContent>
+              </Card>
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <Card>

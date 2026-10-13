@@ -21,3 +21,4 @@ coverage/
 # Operating system files
 .DS_Store
 Thumbs.db
+data/shopping.md

@@ -1,7 +1,9 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import OpenAI from "openai";
-import { runHealthCoach } from "../agents/healthCoach";
+import type { ResponseInputItem } from "openai/resources/responses/responses";
+import { runHealthCoach, saveApprovedPlan } from "../agents/healthCoach";
+import type { ToolDiagnostics } from "../agents/healthCoachTools";
 import { runSafetyReviewer } from "../agents/safetyReviewer";
 import { ACTIVE_PROMPTS, loadPrompt } from "./promptVersions";
 import { recordRound, type RoundState } from "./rounds";
@@ -16,13 +18,19 @@ export type HealthAgentResult = {
   review: SafetyReview;
   blockedReason: string | null;
   rounds: RoundState[];
+  toolCalls: string[];
+  toolEvents: ToolDiagnostics["toolEvents"];
   finalScore: number | null;
   improved: boolean;
   promptVersions: typeof ACTIVE_PROMPTS;
   durationMs: number;
 };
 
-export async function runHealthAgent(task: string, maxRounds = 3): Promise<HealthAgentResult> {
+export async function runHealthAgent(
+  task: string,
+  maxRounds = 3,
+  diagnostics: ToolDiagnostics = { toolCalls: [], toolEvents: [] },
+): Promise<HealthAgentResult> {
   const startedAt = Date.now();
   if (!Number.isInteger(maxRounds) || maxRounds < 1)
     throw new Error("maxRounds должен быть положительным целым числом");
@@ -38,6 +46,8 @@ export async function runHealthAgent(task: string, maxRounds = 3): Promise<Healt
       review,
       blockedReason: "Для такого запроса требуется вмешательство человека.",
       rounds: [],
+      toolCalls: diagnostics.toolCalls,
+      toolEvents: diagnostics.toolEvents,
       finalScore: null,
       improved: false,
       promptVersions: ACTIVE_PROMPTS,
@@ -55,18 +65,42 @@ export async function runHealthAgent(task: string, maxRounds = 3): Promise<Healt
     baseURL: "https://openrouter.ai/api/v1",
   });
   const dataDirectory = path.join(process.cwd(), "data");
-  const [profile, log, coachPrompt, reviewerPrompt] = await Promise.all([
-    readFile(path.join(dataDirectory, "profile.md"), "utf8"),
-    readFile(path.join(dataDirectory, "log.md"), "utf8"),
+  const [coachPrompt, reviewerPrompt] = await Promise.all([
     loadPrompt("healthCoach", ACTIVE_PROMPTS.coach),
     loadPrompt("safetyReviewer", ACTIVE_PROMPTS.reviewer),
   ]);
-  const context = `Задача: ${task}\n\nПрофиль:\n${profile}\n\nДневник:\n${log}`;
+  const shoppingRequested = /покупк|список продуктов/i.test(task);
+  const savedPlanReference =
+    /(?:к|для|по)\s+(?:(?:моему|этому|сохран[её]нному|готовому|последнему|существующему|текущему)\s+)?(?:план[ауе]|меню)/i.test(task);
+  const explicitlyNewPlan =
+    /(?:состав|созд|сдела|подготов|предлож|разработ)[а-яё]*\s+(?:(?:мне|нов[а-яё]*|подробн[а-яё]*)\s+){0,3}(?:план|меню)/i.test(task) ||
+    /нов[а-яё]*\s+(?:план|меню)/i.test(task);
+  const newPlanRequested = explicitlyNewPlan ||
+    (!savedPlanReference && /(?:план|меню)\s+(?:питания\s+)?на\s+(?:завтра|сегодня|неделю|день)/i.test(task));
+  let previousPlan: string | null = null;
+  if (shoppingRequested && !newPlanRequested) {
+    try {
+      previousPlan = (await readFile(path.join(dataDirectory, "output.md"), "utf8"))
+        .replace(/^# Финальный план\s*/, "")
+        .trim();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        throw new Error("Сохранённый план не найден. Сначала составьте и одобрите план.");
+      throw error;
+    }
+    if (!previousPlan)
+      throw new Error("Сохранённый план пуст. Сначала составьте и одобрите план.");
+  }
+  const coachHistory: ResponseInputItem[] = previousPlan
+    ? [{ role: "user", content: task }, { role: "assistant", content: previousPlan }]
+    : [];
   const rounds: RoundState[] = [];
   const result = (plan: string, review: SafetyReview, blockedReason: string | null = null): HealthAgentResult => ({
     plan,
     review,
     blockedReason,
+    toolCalls: diagnostics.toolCalls,
+    toolEvents: diagnostics.toolEvents,
     rounds: !plan
       ? rounds.map((state) => ({ ...state, plan: "" }))
       : rounds,
@@ -75,7 +109,7 @@ export async function runHealthAgent(task: string, maxRounds = 3): Promise<Healt
     durationMs: Date.now() - startedAt,
   });
 
-  let plan = await runHealthCoach(client, model, context, coachPrompt);
+  let plan = previousPlan ?? await runHealthCoach(client, model, task, coachPrompt, diagnostics, coachHistory);
   let review: SafetyReview = {
     verdict: "revise",
     score: 0,
@@ -86,37 +120,40 @@ export async function runHealthAgent(task: string, maxRounds = 3): Promise<Healt
     review = await runSafetyReviewer(
       client,
       model,
-      `${context}\n\nПлан coach-а:\n${plan}`,
+      plan, // Reviewer получает только текст плана и не имеет tools: у него не должно быть побочных эффектов.
       reviewerPrompt,
     );
-    console.log(
-      `Раунд ${round}: ${review.verdict}, score ${review.score}, issues: ${review.issues.join("; ") || "нет"}`,
-    );
+    if (review.verdict === "approve" && review.score < MIN_SAFE_SCORE)
+      review = {
+        ...review,
+        verdict: "revise",
+        issues: [...review.issues, `Оценка ${review.score}/10 ниже порога ${MIN_SAFE_SCORE}/10. Пересмотри план и устрани замечания.`],
+      };
+    console.log("Раунд проверки", {
+      round,
+      verdict: review.verdict,
+      score: review.score,
+      issuesCount: review.issues.length,
+    });
     recordRound(rounds, round, review.verdict === "needs_human_professional" ? "" : plan, review);
 
     if (review.verdict === "needs_human_professional") {
       return result("", review);
     }
     if (review.verdict === "approve") {
-      if (review.score < MIN_SAFE_SCORE)
-        return result(
-          "",
-          review,
-          `Reviewer одобрил план, но оценка безопасности ${review.score}/10 ниже порога ${MIN_SAFE_SCORE}/10. План не выдан.`,
-        );
-      await writeFile(
-        path.join(dataDirectory, "output.md"),
-        `# Финальный план\n\n${plan}\n`,
-        "utf8",
-      );
+      // Только harness вызывает tools записи после approve и порога score:
+      // промпт и повторный ответ модели не являются надёжной границей для побочных эффектов.
+      await saveApprovedPlan(plan, shoppingRequested, diagnostics);
       return result(plan, review);
     }
     if (round < maxRounds)
       plan = await runHealthCoach(
         client,
         model,
-        `${context}\n\nТекущий план:\n${plan}\n\nЗамечания reviewer-а:\n- ${review.issues.join("\n- ")}\nПерепиши план с учётом замечаний.`,
+        `Замечания reviewer-а:\n- ${review.issues.join("\n- ")}\nПерепиши последний план с учётом замечаний.`,
         coachPrompt,
+        diagnostics,
+        coachHistory,
       );
   }
 

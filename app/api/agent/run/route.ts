@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { runHealthAgent } from "../../../../src/harness/runHealthAgent";
+import type { ToolDiagnostics } from "../../../../src/agents/healthCoachTools";
 
 export async function POST(request: Request) {
   let body: unknown;
@@ -20,12 +21,16 @@ export async function POST(request: Request) {
     );
   }
 
+  const diagnostics: ToolDiagnostics = { toolCalls: [], toolEvents: [] };
   try {
-    return NextResponse.json(await runHealthAgent(task.trim()));
+    return NextResponse.json(await runHealthAgent(task.trim(), 3, diagnostics));
   } catch (error) {
-    console.error(error);
+    console.error("Ошибка запуска агента", { toolEvents: diagnostics.toolEvents });
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Ошибка запуска агента" },
+      {
+        error: error instanceof Error ? error.message : "Ошибка запуска агента",
+        ...diagnostics,
+      },
       { status: 500 },
     );
   }
