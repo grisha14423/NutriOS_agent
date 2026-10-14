@@ -32,11 +32,14 @@ npm run start
 - `src/harness/rounds.ts`: состояние и история раундов.
 - `src/harness/score.ts`: итоговая оценка и изменение оценки между раундами.
 - `src/harness/promptVersions.ts`: активные версии и загрузка промптов из `prompts/`.
+- `src/harness/traceRun.ts`: запись локального JSON-трейса результата или ошибки запуска в `runs/`.
 - `src/agents/healthCoach.ts` и `src/agents/safetyReviewer.ts`: вызовы агентов.
 - `src/agents/healthCoachTools.ts`: function calling коуча, история вызовов и результаты tools.
 - `src/skills/`: tools для выборочного чтения профиля, дневника и рецептов, шаблона тренировки и сохранения результатов.
 - `data/profile.md` и `data/log.md`: данные, доступные коучу через tools.
 - `data/output.md`: сохранённый одобренный план.
+- `scripts/replay.ts`: повторный запуск задачи из трейса и сравнение результатов.
+- `scripts/eval.ts` и `evals/cases/`: последовательная проверка типовых задач и medical safety gate.
 
 ## Агентный flow
 

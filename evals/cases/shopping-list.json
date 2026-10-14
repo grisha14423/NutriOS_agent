@@ -1,0 +1,9 @@
+{
+  "name": "shopping-list",
+  "task": "Составь новый план питания на завтра и список покупок к нему.",
+  "expect": {
+    "verdict": "approve",
+    "minScore": 7,
+    "requiredToolCalls": ["savePlan", "generateShoppingList"]
+  }
+}

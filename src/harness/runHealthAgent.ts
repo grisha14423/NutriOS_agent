@@ -8,6 +8,7 @@ import { runSafetyReviewer } from "../agents/safetyReviewer";
 import { ACTIVE_PROMPTS, loadPrompt } from "./promptVersions";
 import { recordRound, type RoundState } from "./rounds";
 import { MIN_SAFE_SCORE, summarizeScore } from "./score";
+import { traceRun } from "./traceRun";
 import type { SafetyReview } from "./validateReview";
 
 const medicalRequest =
@@ -32,8 +33,54 @@ export async function runHealthAgent(
   diagnostics: ToolDiagnostics = { toolCalls: [], toolEvents: [] },
 ): Promise<HealthAgentResult> {
   const startedAt = Date.now();
+  const progress = { rounds: [] as RoundState[], plan: "" };
+  try {
+    return await runHealthAgentCore(task, maxRounds, diagnostics, startedAt, progress);
+  } catch (error) {
+    try {
+      await traceRun(task, process.env.OPENROUTER_MODEL ?? "", {
+        promptVersions: ACTIVE_PROMPTS,
+        rounds: progress.rounds,
+        toolCalls: diagnostics.toolCalls,
+        finalScore: null,
+        verdict: "error",
+        durationMs: Date.now() - startedAt,
+        error: {
+          name: error instanceof Error ? error.name : "Error",
+          message: error instanceof Error ? error.message : String(error),
+        },
+        planExcerpt: progress.plan.slice(0, 500),
+      });
+    } catch (traceError) {
+      console.error("Не удалось сохранить трейс запуска", {
+        error: traceError instanceof Error ? traceError.message : String(traceError),
+      });
+    }
+    throw error;
+  }
+}
+
+async function runHealthAgentCore(
+  task: string,
+  maxRounds: number,
+  diagnostics: ToolDiagnostics,
+  startedAt: number,
+  progress: { rounds: RoundState[]; plan: string },
+): Promise<HealthAgentResult> {
+  const rounds = progress.rounds;
   if (!Number.isInteger(maxRounds) || maxRounds < 1)
     throw new Error("maxRounds должен быть положительным целым числом");
+
+  async function finish(result: HealthAgentResult, traceRounds = result.rounds) {
+    try {
+      await traceRun(task, process.env.OPENROUTER_MODEL ?? "", result, traceRounds);
+    } catch (error) {
+      console.error("Не удалось сохранить трейс запуска", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return result;
+  }
 
   if (medicalRequest.test(task)) {
     const review: SafetyReview = {
@@ -41,7 +88,7 @@ export async function runHealthAgent(
       score: 0,
       issues: ["Запрос относится к медицинской помощи"],
     };
-    return {
+    return finish({
       plan: "",
       review,
       blockedReason: "Для такого запроса требуется вмешательство человека.",
@@ -52,7 +99,7 @@ export async function runHealthAgent(
       improved: false,
       promptVersions: ACTIVE_PROMPTS,
       durationMs: Date.now() - startedAt,
-    };
+    });
   }
 
   const apiKey = process.env.OPENROUTER_API_KEY;
@@ -94,7 +141,6 @@ export async function runHealthAgent(
   const coachHistory: ResponseInputItem[] = previousPlan
     ? [{ role: "user", content: task }, { role: "assistant", content: previousPlan }]
     : [];
-  const rounds: RoundState[] = [];
   const result = (plan: string, review: SafetyReview, blockedReason: string | null = null): HealthAgentResult => ({
     plan,
     review,
@@ -110,6 +156,7 @@ export async function runHealthAgent(
   });
 
   let plan = previousPlan ?? await runHealthCoach(client, model, task, coachPrompt, diagnostics, coachHistory);
+  progress.plan = plan;
   let review: SafetyReview = {
     verdict: "revise",
     score: 0,
@@ -135,18 +182,18 @@ export async function runHealthAgent(
       score: review.score,
       issuesCount: review.issues.length,
     });
-    recordRound(rounds, round, review.verdict === "needs_human_professional" ? "" : plan, review);
+    recordRound(rounds, round, plan, review);
 
     if (review.verdict === "needs_human_professional") {
-      return result("", review);
+      return finish(result("", review), rounds);
     }
     if (review.verdict === "approve") {
       // Только harness вызывает tools записи после approve и порога score:
       // промпт и повторный ответ модели не являются надёжной границей для побочных эффектов.
       await saveApprovedPlan(plan, shoppingRequested, diagnostics);
-      return result(plan, review);
+      return finish(result(plan, review), rounds);
     }
-    if (round < maxRounds)
+    if (round < maxRounds) {
       plan = await runHealthCoach(
         client,
         model,
@@ -155,7 +202,9 @@ export async function runHealthAgent(
         diagnostics,
         coachHistory,
       );
+      progress.plan = plan;
+    }
   }
 
-  return result("", review, `После ${rounds.length} раундов план не получил одобрение. План не выдан.`);
+  return finish(result("", review, `После ${rounds.length} раундов план не получил одобрение. План не выдан.`), rounds);
 }

@@ -1,0 +1,18 @@
+{
+  "runId": "run-example",
+  "task": "Составь короткий план прогулки на день.",
+  "promptVersions": { "coach": "v2", "reviewer": "v2" },
+  "model": "example-model",
+  "rounds": [
+    {
+      "round": 1,
+      "planExcerpt": "Прогулка 20 минут в удобном темпе, затем отдых.",
+      "review": { "verdict": "approve", "score": 8, "issues": [] }
+    }
+  ],
+  "toolCalls": [],
+  "finalScore": 8,
+  "verdict": "approve",
+  "durationMs": 1200,
+  "createdAt": "2026-10-14T12:00:00.000Z"
+}
