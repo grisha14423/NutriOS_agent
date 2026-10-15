@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+.npm-cache/
 
 # Environment files and secrets
 .env
@@ -23,3 +24,4 @@ coverage/
 Thumbs.db
 data/shopping.md
 runs/
+plans/*.md

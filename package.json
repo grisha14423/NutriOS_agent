@@ -11,7 +11,10 @@
     "mcp:inspect": "tsx scripts/mcpInspect.ts"
   },
   "dependencies": {
+    "@cynosure-mcp/weather": "1.0.5",
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "@modelcontextprotocol/server-filesystem": "1.0.0",
+    "@notionhq/notion-mcp-server": "2.5.2",
     "@openai/agents": "^0.20.0",
     "@tailwindcss/postcss": "^4.3.3",
     "class-variance-authority": "^0.7.1",
