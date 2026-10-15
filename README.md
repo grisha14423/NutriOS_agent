@@ -15,6 +15,12 @@ OPENROUTER_API_KEY=ваш_ключ
 OPENROUTER_MODEL=идентификатор_модели
 # Необязательно: токен internal integration, которой открыт только раздел Wellness
 NOTION_TOKEN=ваш_токен
+SUPABASE_URL=https://ваш-проект.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=секретный_legacy_service_role_ключ
+EMBEDDING_MODEL=openai/text-embedding-3-small
+# Необязательно: отдельный ключ и OpenAI-compatible base URL для embeddings
+EMBEDDING_API_KEY=ключ_сервиса_embeddings
+EMBEDDING_BASE_URL=https://openrouter.ai/api/v1
 ```
 
 Затем установите зависимости и запустите сервер разработки:
@@ -24,13 +30,19 @@ npm install
 npm run dev
 ```
 
+Перед первым запуском RAG выполните по порядку SQL-файлы `docs/001_*.sql` - `docs/004_*.sql` в Supabase SQL Editor или DBeaver (либо примените эквивалентные миграции из `supabase/migrations/`). Уже выполненные миграции повторять не нужно. Затем запустите `npm run ingest`. Нужна embedding-модель с размерностью 1536; скрипт атомарно заменяет все секции из `knowledge/` без дублей. При смене `EMBEDDING_MODEL` повторите ingest: поиск отклоняет векторы, созданные другой моделью. Ключ `SUPABASE_SERVICE_ROLE_KEY` хранится только на сервере. Если `EMBEDDING_API_KEY` не задан, используется `OPENROUTER_API_KEY`; если `EMBEDDING_BASE_URL` не задан, используется OpenRouter.
+
+## Memory vs RAG
+
+`data/profile.md` и `data/log.md` - личная память о человеке и его текущих привычках. Коуч читает эти файлы через MCP tools только когда они нужны для задачи. Папка `knowledge/` - общая база знаний о рецептах, питании, тренировках и восстановлении. Команда `npm run ingest` превращает разделы Markdown в embeddings и сохраняет их в Supabase pgvector. Перед новым планом коуч вызывает `searchKnowledge` и получает наиболее близкие разделы с источниками; без успешного поиска новый план не сохраняется. Запрос и заголовки найденных разделов записываются в JSON-трейс, а число результатов видно в списке действий агента.
+
 Откройте `http://localhost:3000`. Для production используйте `npm run build`, затем `npm run start`. Не запускайте production-сборку одновременно с сервером разработки: оба режима используют `.next`.
 
 ## До MCP / После MCP
 
 До MCP чтение профиля, дневника и рецептов, а также запись плана подключались к коучу отдельными функциями в приложении. Для каждой новой интеграции приходилось вручную описывать tool и его вызов.
 
-После MCP эти данные доступны через локальный stdio-сервер `src/mcp/markdownHealthServer.ts`: пять tools и четыре resources. Harness читает `src/mcp/servers.config.ts`, запускает включённые серверы на время запроса и передаёт их tools Health Coach через OpenAI Agents SDK. Новый сервер подключается записью в конфиге без правок harness и без обёрток над его tools. `suggestWorkoutTemplate` и `generateShoppingList` остаются локальными tools. Harness сохраняет одобренный план через markdown-health. В UI и JSON-трейсе вызовы имеют источник `[markdown-health]`, `[filesystem]`, `[weather]`, `[notion]` или `[local]`.
+После MCP эти данные доступны через локальный stdio-сервер `src/mcp/markdownHealthServer.ts`: пять tools и четыре resources. Harness читает `src/mcp/servers.config.ts`, запускает включённые серверы на время запроса и передаёт их tools Health Coach через OpenAI Agents SDK. Новый сервер подключается записью в конфиге без правок harness и без обёрток над его tools. `suggestWorkoutTemplate` и `searchKnowledge` доступны коучу как локальные tools; `generateShoppingList` вызывается после одобрения плана. Harness сохраняет одобренный план через markdown-health. В UI и JSON-трейсе вызовы имеют источник `[markdown-health]`, `[filesystem]`, `[weather]`, `[notion]`, `[knowledge]` или `[local]`.
 
 | Сервер | Пакет | Возможности | Авторизация |
 | --- | --- | --- | --- |
@@ -70,7 +82,7 @@ npm run dev
 npm run replay runs/run-XXX.json
 ```
 
-Чтобы последовательно проверить пять задач, включая раннюю остановку медицинского запроса, решение reviewer-а по медицинскому риску и вызовы tools для списка покупок, запустите:
+Чтобы последовательно проверить шесть задач, включая раннюю остановку медицинского запроса, решение reviewer-а по медицинскому риску, вызовы tools для списка покупок и поиск рецепта в базе знаний, запустите:
 
 ```powershell
 npm run eval

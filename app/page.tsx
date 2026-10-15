@@ -33,7 +33,7 @@ type AgentResult = {
 
 type ToolDiagnostics = {
   toolCalls: string[];
-  toolEvents: { name: string; source: string; status: "ok" | "error"; durationMs: number }[];
+  toolEvents: { name: string; source: string; status: "ok" | "error"; durationMs: number; query?: string; chunkCount?: number }[];
 };
 
 type Review = {
@@ -51,14 +51,16 @@ const verdictLabels = {
 function ToolEventsList({ events }: { events: ToolDiagnostics["toolEvents"] }) {
   return (
     <ol className="space-y-2.5">
-      {events.map(({ name, source, status, durationMs }, index) => (
+      {events.map(({ name, source, status, durationMs, query, chunkCount }, index) => (
         <li key={`${index}-${name}`} className="flex flex-wrap items-center gap-3 rounded-lg border bg-secondary/30 p-3 sm:flex-nowrap sm:p-4">
           <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full bg-card text-sm font-semibold text-primary shadow-sm ring-1 ring-border">
             {index + 1}
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="break-all text-sm font-semibold text-foreground">{name}</span>
+              <span className="break-all text-sm font-semibold text-foreground">
+                {source === "knowledge" ? <>🔍 knowledge: {query} → {chunkCount ?? 0} chunks</> : name}
+              </span>
               <Badge className={source !== "local" ? "border-primary/20 bg-primary/10 text-primary" : "border-border bg-card text-secondary-foreground"}>
                 [{source}]
               </Badge>

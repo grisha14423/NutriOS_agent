@@ -4,10 +4,11 @@ import type { AgentInputItem } from "@openai/agents";
 import { z } from "zod";
 import { generateShoppingList } from "../skills/shopping";
 import { suggestWorkoutTemplate, suggestWorkoutTemplateDescription, suggestWorkoutTemplateSchema } from "../skills/workouts";
+import { searchKnowledge } from "../rag/retriever";
 
 export type ToolDiagnostics = {
   toolCalls: string[];
-  toolEvents: { name: string; source: string; status: "ok" | "error"; durationMs: number }[];
+  toolEvents: { name: string; source: string; status: "ok" | "error"; durationMs: number; query?: string; headings?: string[]; matches?: { file: string; heading: string }[]; chunkCount?: number }[];
 };
 
 const toolLabel = (name: string, source: string) => `[${source}] ${name}`;
@@ -29,12 +30,29 @@ export async function runHealthCoach(
   history: AgentInputItem[],
   mcpServers: MCPServerStdio[],
 ) {
+  const knowledgeTool = tool({
+    name: "searchKnowledge",
+    description: "Ищи в базе знаний рецепты, правила питания, шаблоны тренировок, правила восстановления. Перед составлением плана найди подходящие материалы.",
+    parameters: z.object({ query: z.string().min(1) }),
+    errorFunction: null,
+    execute: async ({ query }) => {
+      const startedAt = Date.now();
+      try {
+        const chunks = await searchKnowledge(query);
+        diagnostics.toolEvents.push({ name: "searchKnowledge", source: "knowledge", status: "ok", durationMs: Date.now() - startedAt, query, headings: chunks.map(({ heading }) => heading), matches: chunks.map(({ file, heading }) => ({ file, heading })), chunkCount: chunks.length });
+        return JSON.stringify(chunks);
+      } catch (error) {
+        diagnostics.toolEvents.push({ name: "searchKnowledge", source: "knowledge", status: "error", durationMs: Date.now() - startedAt, query, headings: [], matches: [], chunkCount: 0 });
+        throw error;
+      }
+    },
+  });
   const agent = new Agent({
     name: "Health Coach",
     instructions: prompt,
     model: new OpenAIResponsesModel(client, model),
     modelSettings: { store: false },
-    tools: [workoutTool],
+    tools: [workoutTool, knowledgeTool],
     mcpServers,
   });
   const started = new Map<string, number>();
@@ -46,6 +64,7 @@ export async function runHealthCoach(
     }
   }
   const sourceOf = (name: string) => {
+    if (name === "searchKnowledge") return "knowledge";
     if (localTools.has(name)) return "local";
     const source = toolSources.get(name);
     if (!source) throw new Error(`Неизвестный источник tool: ${name}`);
@@ -57,6 +76,7 @@ export async function runHealthCoach(
     started.set(calledTool.name, Date.now());
   });
   runner.on("agent_tool_end", (_context, _agent, calledTool, output) => {
+    if (calledTool.name === "searchKnowledge") return;
     diagnostics.toolEvents.push({
       name: calledTool.name,
       source: sourceOf(calledTool.name),

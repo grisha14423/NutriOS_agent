@@ -35,6 +35,9 @@ npm run start
 - `src/harness/traceRun.ts`: запись локального JSON-трейса результата или ошибки запуска в `runs/`.
 - `src/agents/healthCoach.ts` и `src/agents/safetyReviewer.ts`: вызовы агентов.
 - `src/agents/healthCoachMcp.ts`: Health Coach на OpenAI Agents SDK, MCP tools, история вызовов и диагностика.
+- `knowledge/`: общая база знаний, разбитая на разделы `##`; `scripts/ingest.ts` загружает embeddings в Supabase pgvector.
+- `src/rag/retriever.ts`: поиск ближайших разделов через embedding и SQL-функцию `search_knowledge`.
+- `docs/001_*.sql` - `docs/004_*.sql`: схема, атомарная загрузка и проверка embedding-модели; копии миграций находятся в `supabase/migrations/`.
 - `src/mcp/markdownHealthServer.ts`: локальный stdio-сервер с tools и resources для Markdown-данных.
 - `src/mcp/servers.config.ts`: команды, окружение и флаги для локального, filesystem, weather и Notion MCP-серверов.
 - `src/skills/`: локальные tools для шаблона тренировки и списка покупок. Старые модули данных имеют суффикс `-UNUSED.ts` и не подключены к агенту.
@@ -45,7 +48,7 @@ npm run start
 
 ## Агентный flow
 
-1. Harness запускает включённые stdio MCP-серверы из конфига на время запроса. Health Coach получает их tools через OpenAI Agents SDK и запрашивает нужные данные. Notion включается при наличии `NOTION_TOKEN`.
+1. Harness запускает включённые stdio MCP-серверы из конфига на время запроса. Health Coach получает их tools через OpenAI Agents SDK и запрашивает нужные данные. Перед новым планом коуч вызывает локальный `searchKnowledge`, который ищет в Supabase pgvector; harness отклоняет план без успешного поиска. Notion включается при наличии `NOTION_TOKEN`.
 2. Health Coach создаёт план.
 3. Safety Reviewer получает только текст плана и не имеет tools.
 4. При `revise` coach получает замечания и переписывает план. Всего не более трёх раундов.

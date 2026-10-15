@@ -11,6 +11,7 @@ export type RunTrace = {
   model: string;
   rounds: { round: number; planExcerpt: string; review: RoundState["review"] }[];
   toolCalls: string[];
+  toolEvents: HealthAgentResult["toolEvents"];
   finalScore: number | null;
   verdict: RoundState["review"]["verdict"] | "error";
   durationMs: number;
@@ -23,6 +24,7 @@ export type ErrorRun = {
   promptVersions: HealthAgentResult["promptVersions"];
   rounds: RoundState[];
   toolCalls: string[];
+  toolEvents: HealthAgentResult["toolEvents"];
   finalScore: null;
   verdict: "error";
   durationMs: number;
@@ -49,6 +51,7 @@ export async function traceRun(
       review,
     })),
     toolCalls: result.toolCalls,
+    toolEvents: result.toolEvents,
     finalScore: result.finalScore,
     verdict: "error" in result ? result.verdict : result.review.verdict,
     durationMs: result.durationMs,
