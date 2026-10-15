@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-export const ACTIVE_PROMPTS = { coach: "v3", reviewer: "v2" } as const;
+export const ACTIVE_PROMPTS = { coach: "v4", reviewer: "v2" } as const;
 
 export async function loadPrompt(
   name: "healthCoach" | "safetyReviewer",

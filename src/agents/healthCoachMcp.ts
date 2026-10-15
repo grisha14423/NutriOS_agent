@@ -7,10 +7,10 @@ import { suggestWorkoutTemplate, suggestWorkoutTemplateDescription, suggestWorko
 
 export type ToolDiagnostics = {
   toolCalls: string[];
-  toolEvents: { name: string; source: "mcp" | "tool"; status: "ok" | "error"; durationMs: number }[];
+  toolEvents: { name: string; source: string; status: "ok" | "error"; durationMs: number }[];
 };
 
-const toolLabel = (name: string, source: "mcp" | "tool") => `${name} (${source})`;
+const toolLabel = (name: string, source: string) => `[${source}] ${name}`;
 
 const workoutTool = tool({
   name: "suggestWorkoutTemplate",
@@ -27,7 +27,7 @@ export async function runHealthCoach(
   prompt: string,
   diagnostics: ToolDiagnostics,
   history: AgentInputItem[],
-  mcpServer: MCPServerStdio,
+  mcpServers: MCPServerStdio[],
 ) {
   const agent = new Agent({
     name: "Health Coach",
@@ -35,25 +35,36 @@ export async function runHealthCoach(
     model: new OpenAIResponsesModel(client, model),
     modelSettings: { store: false },
     tools: [workoutTool],
-    mcpServers: [mcpServer],
+    mcpServers,
   });
   const started = new Map<string, number>();
   const localTools = new Set(agent.tools.map((item) => item.name));
+  const toolSources = new Map<string, string>();
+  for (const server of mcpServers) {
+    for (const availableTool of await server.listTools()) {
+      toolSources.set(availableTool.name.replace(/[^a-zA-Z0-9]/g, "_"), server.name);
+    }
+  }
+  const sourceOf = (name: string) => {
+    if (localTools.has(name)) return "local";
+    const source = toolSources.get(name);
+    if (!source) throw new Error(`Неизвестный источник tool: ${name}`);
+    return source;
+  };
   const runner = new Runner({ tracingDisabled: true });
   runner.on("agent_tool_start", (_context, _agent, calledTool) => {
-    const source = localTools.has(calledTool.name) ? "tool" : "mcp";
-    diagnostics.toolCalls.push(toolLabel(calledTool.name, source));
+    diagnostics.toolCalls.push(toolLabel(calledTool.name, sourceOf(calledTool.name)));
     started.set(calledTool.name, Date.now());
   });
-  runner.on("agent_tool_end", (_context, _agent, calledTool) => {
+  runner.on("agent_tool_end", (_context, _agent, calledTool, output) => {
     diagnostics.toolEvents.push({
       name: calledTool.name,
-      source: localTools.has(calledTool.name) ? "tool" : "mcp",
-      status: "ok",
+      source: sourceOf(calledTool.name),
+      status: output.startsWith("Error:") ? "error" : "ok",
       durationMs: Date.now() - (started.get(calledTool.name) ?? Date.now()),
     });
   });
-  const result = await runner.run(agent, [...history, { role: "user", content: input }], { maxTurns: 8 });
+  const result = await runner.run(agent, [...history, { role: "user", content: input }], { maxTurns: 16 });
   if (!result.finalOutput) throw new Error("Health Coach не вернул текстовый план");
   history.splice(0, history.length, ...result.history);
   return result.finalOutput;
@@ -65,24 +76,24 @@ export async function saveApprovedPlan(
   diagnostics: ToolDiagnostics,
   mcpServer: MCPServerStdio,
 ) {
-  diagnostics.toolCalls.push(toolLabel("save_health_plan", "mcp"));
+  diagnostics.toolCalls.push(toolLabel("save_health_plan", "markdown-health"));
   const saveStartedAt = Date.now();
   try {
     const result = await mcpServer.callToolResult("save_health_plan", { markdown: plan });
     if (result.isError) throw new Error("MCP-сервер не сохранил план");
-    diagnostics.toolEvents.push({ name: "save_health_plan", source: "mcp", status: "ok", durationMs: Date.now() - saveStartedAt });
+    diagnostics.toolEvents.push({ name: "save_health_plan", source: "markdown-health", status: "ok", durationMs: Date.now() - saveStartedAt });
   } catch (error) {
-    diagnostics.toolEvents.push({ name: "save_health_plan", source: "mcp", status: "error", durationMs: Date.now() - saveStartedAt });
+    diagnostics.toolEvents.push({ name: "save_health_plan", source: "markdown-health", status: "error", durationMs: Date.now() - saveStartedAt });
     throw new Error(`Ошибка MCP tool save_health_plan: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (shoppingRequested) {
-    diagnostics.toolCalls.push(toolLabel("generateShoppingList", "tool"));
+    diagnostics.toolCalls.push(toolLabel("generateShoppingList", "local"));
     const shoppingStartedAt = Date.now();
     try {
       await generateShoppingList(plan);
-      diagnostics.toolEvents.push({ name: "generateShoppingList", source: "tool", status: "ok", durationMs: Date.now() - shoppingStartedAt });
+      diagnostics.toolEvents.push({ name: "generateShoppingList", source: "local", status: "ok", durationMs: Date.now() - shoppingStartedAt });
     } catch (error) {
-      diagnostics.toolEvents.push({ name: "generateShoppingList", source: "tool", status: "error", durationMs: Date.now() - shoppingStartedAt });
+      diagnostics.toolEvents.push({ name: "generateShoppingList", source: "local", status: "error", durationMs: Date.now() - shoppingStartedAt });
       throw new Error(`План сохранён, но список покупок не создан. Ошибка tool generateShoppingList: ${error instanceof Error ? error.message : String(error)}`);
     }
   }

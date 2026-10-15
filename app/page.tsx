@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react";
 import {
   AlertCircle,
+  ArrowUp,
   CheckCircle2,
   ChevronDown,
   HeartPulse,
@@ -15,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 
 type AgentResult = {
   plan: string;
@@ -31,7 +33,7 @@ type AgentResult = {
 
 type ToolDiagnostics = {
   toolCalls: string[];
-  toolEvents: { name: string; source: "mcp" | "tool"; status: "ok" | "error"; durationMs: number }[];
+  toolEvents: { name: string; source: string; status: "ok" | "error"; durationMs: number }[];
 };
 
 type Review = {
@@ -57,8 +59,8 @@ function ToolEventsList({ events }: { events: ToolDiagnostics["toolEvents"] }) {
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <span className="break-all text-sm font-semibold text-foreground">{name}</span>
-              <Badge className={source === "mcp" ? "border-primary/20 bg-primary/10 text-primary" : "border-border bg-card text-secondary-foreground"}>
-                {source}
+              <Badge className={source !== "local" ? "border-primary/20 bg-primary/10 text-primary" : "border-border bg-card text-secondary-foreground"}>
+                [{source}]
               </Badge>
             </div>
             <div className={`mt-1 flex items-center gap-1.5 text-sm ${status === "ok" ? "text-primary" : "text-destructive"}`}>
@@ -150,31 +152,36 @@ export default function Home() {
                 <label htmlFor="task" className="text-sm font-medium text-foreground">
                   Ваша задача
                 </label>
-                <Textarea
-                  id="task"
-                  value={task}
-                  onChange={(event) => setTask(event.target.value)}
-                  placeholder="Например: составь план питания и активности на день"
-                  aria-describedby="task-hint"
-                  disabled={status === "running"}
-                />
+                <div className="flex items-end gap-2">
+                  <Textarea
+                    id="task"
+                    rows={1}
+                    value={task}
+                    onChange={(event) => {
+                      const field = event.currentTarget;
+                      field.style.height = "auto";
+                      field.style.height = `${field.scrollHeight}px`;
+                      setTask(field.value);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                        event.preventDefault();
+                        event.currentTarget.form?.requestSubmit();
+                      }
+                    }}
+                    placeholder="Например: составь план питания и активности на день"
+                    aria-describedby="task-hint"
+                    disabled={status === "running"}
+                    className={cn("min-h-11 max-h-48 min-w-0 flex-1 resize-none overflow-y-auto rounded-2xl px-4 py-2.5")}
+                  />
+                  <Button type="submit" aria-label={status === "running" ? "Агент работает" : "Отправить запрос"} disabled={status === "running" || !task.trim()} className="size-11 shrink-0 rounded-full p-0">
+                    {status === "running" ? <LoaderCircle aria-hidden="true" className="size-5 animate-spin" /> : <ArrowUp aria-hidden="true" className="size-5" />}
+                  </Button>
+                </div>
                 <p id="task-hint" className="text-sm text-muted-foreground">
-                  Не указывайте симптомы, диагнозы, лечение или лекарства.
+                  Enter отправляет запрос, Shift+Enter переносит строку. Не указывайте симптомы, диагнозы, лечение или лекарства.
                 </p>
               </div>
-              <Button type="submit" disabled={status === "running" || !task.trim()} className="w-full sm:w-auto">
-                {status === "running" ? (
-                  <>
-                    <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
-                    Агент работает…
-                  </>
-                ) : (
-                  <>
-                    <Sparkles aria-hidden="true" className="size-4" />
-                    Запустить агента
-                  </>
-                )}
-              </Button>
             </form>
           </CardContent>
         </Card>
