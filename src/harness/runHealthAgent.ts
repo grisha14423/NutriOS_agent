@@ -1,9 +1,8 @@
-import { readFile } from "node:fs/promises";
+import { MCPServerStdio, type AgentInputItem } from "@openai/agents";
 import path from "node:path";
 import OpenAI from "openai";
-import type { ResponseInputItem } from "openai/resources/responses/responses";
 import { runHealthCoach, saveApprovedPlan } from "../agents/healthCoach";
-import type { ToolDiagnostics } from "../agents/healthCoachTools";
+import type { ToolDiagnostics } from "../agents/healthCoachMcp";
 import { runSafetyReviewer } from "../agents/safetyReviewer";
 import { ACTIVE_PROMPTS, loadPrompt } from "./promptVersions";
 import { recordRound, type RoundState } from "./rounds";
@@ -111,12 +110,21 @@ async function runHealthAgentCore(
     apiKey,
     baseURL: "https://openrouter.ai/api/v1",
   });
-  const dataDirectory = path.join(process.cwd(), "data");
+  const mcpServer = new MCPServerStdio({
+    name: "markdown-health",
+    command: process.execPath,
+    args: [path.join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs"), path.join(process.cwd(), "src", "mcp", "markdownHealthServer.ts")],
+    cwd: process.cwd(),
+    toolFilter: { blockedToolNames: ["save_health_plan", "append_daily_log"] },
+    errorFunction: null,
+  });
+  try {
+  await mcpServer.connect();
   const [coachPrompt, reviewerPrompt] = await Promise.all([
     loadPrompt("healthCoach", ACTIVE_PROMPTS.coach),
     loadPrompt("safetyReviewer", ACTIVE_PROMPTS.reviewer),
   ]);
-  const shoppingRequested = /покупк|список продуктов/i.test(task);
+  const shoppingRequested = /покупк|покупок|список продуктов/i.test(task);
   const savedPlanReference =
     /(?:к|для|по)\s+(?:(?:моему|этому|сохран[её]нному|готовому|последнему|существующему|текущему)\s+)?(?:план[ауе]|меню)/i.test(task);
   const explicitlyNewPlan =
@@ -127,19 +135,21 @@ async function runHealthAgentCore(
   let previousPlan: string | null = null;
   if (shoppingRequested && !newPlanRequested) {
     try {
-      previousPlan = (await readFile(path.join(dataDirectory, "output.md"), "utf8"))
+      const content = (await mcpServer.readResource("plans://latest")).contents[0];
+      if (!content || typeof content.text !== "string") throw new Error("MCP resource plans://latest не содержит текст");
+      previousPlan = content.text
         .replace(/^# Финальный план\s*/, "")
         .trim();
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      if ((error as NodeJS.ErrnoException).code === "ENOENT" || String(error).includes("ENOENT"))
         throw new Error("Сохранённый план не найден. Сначала составьте и одобрите план.");
       throw error;
     }
     if (!previousPlan)
       throw new Error("Сохранённый план пуст. Сначала составьте и одобрите план.");
   }
-  const coachHistory: ResponseInputItem[] = previousPlan
-    ? [{ role: "user", content: task }, { role: "assistant", content: previousPlan }]
+  const coachHistory: AgentInputItem[] = previousPlan
+    ? [{ role: "user", content: task }, { role: "assistant", status: "completed", content: [{ type: "output_text", text: previousPlan }] }]
     : [];
   const result = (plan: string, review: SafetyReview, blockedReason: string | null = null): HealthAgentResult => ({
     plan,
@@ -155,7 +165,7 @@ async function runHealthAgentCore(
     durationMs: Date.now() - startedAt,
   });
 
-  let plan = previousPlan ?? await runHealthCoach(client, model, task, coachPrompt, diagnostics, coachHistory);
+  let plan = previousPlan ?? await runHealthCoach(client, model, task, coachPrompt, diagnostics, coachHistory, mcpServer);
   progress.plan = plan;
   let review: SafetyReview = {
     verdict: "revise",
@@ -190,7 +200,7 @@ async function runHealthAgentCore(
     if (review.verdict === "approve") {
       // Только harness вызывает tools записи после approve и порога score:
       // промпт и повторный ответ модели не являются надёжной границей для побочных эффектов.
-      await saveApprovedPlan(plan, shoppingRequested, diagnostics);
+      await saveApprovedPlan(plan, shoppingRequested, diagnostics, mcpServer);
       return finish(result(plan, review), rounds);
     }
     if (round < maxRounds) {
@@ -201,10 +211,14 @@ async function runHealthAgentCore(
         coachPrompt,
         diagnostics,
         coachHistory,
+        mcpServer,
       );
       progress.plan = plan;
     }
   }
 
   return finish(result("", review, `После ${rounds.length} раундов план не получил одобрение. План не выдан.`), rounds);
+  } finally {
+    await mcpServer.close();
+  }
 }

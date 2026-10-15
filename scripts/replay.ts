@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import nextEnv from "@next/env";
-import type { ToolDiagnostics } from "../src/agents/healthCoachTools";
+import type { ToolDiagnostics } from "../src/agents/healthCoachMcp";
 import { ACTIVE_PROMPTS } from "../src/harness/promptVersions";
 import { runHealthAgent } from "../src/harness/runHealthAgent";
 import type { RunTrace } from "../src/harness/traceRun";

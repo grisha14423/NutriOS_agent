@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { runHealthAgent } from "../../../../src/harness/runHealthAgent";
-import type { ToolDiagnostics } from "../../../../src/agents/healthCoachTools";
+import type { ToolDiagnostics } from "../../../../src/agents/healthCoachMcp";
 
 export async function POST(request: Request) {
   let body: unknown;
