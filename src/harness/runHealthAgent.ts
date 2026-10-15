@@ -41,6 +41,7 @@ export async function runHealthAgent(
         promptVersions: ACTIVE_PROMPTS,
         rounds: progress.rounds,
         toolCalls: diagnostics.toolCalls,
+        toolEvents: diagnostics.toolEvents,
         finalScore: null,
         verdict: "error",
         durationMs: Date.now() - startedAt,
@@ -170,6 +171,9 @@ async function runHealthAgentCore(
 
   let plan = previousPlan ?? await runHealthCoach(client, model, task, coachPrompt, diagnostics, coachHistory, connected);
   progress.plan = plan;
+  if (!previousPlan && !diagnostics.toolEvents.some((event) =>
+    event.name === "searchKnowledge" && event.status === "ok" && (event.chunkCount ?? 0) > 0))
+    throw new Error("Health Coach не выполнил успешный поиск в базе знаний перед созданием плана");
   let review: SafetyReview = {
     verdict: "revise",
     score: 0,
