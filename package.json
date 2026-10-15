@@ -12,12 +12,14 @@
     "ingest": "tsx scripts/ingest.ts"
   },
   "dependencies": {
+    "@ai-sdk/react": "^4.0.146",
     "@cynosure-mcp/weather": "1.0.5",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@modelcontextprotocol/server-filesystem": "1.0.0",
     "@notionhq/notion-mcp-server": "2.5.2",
     "@openai/agents": "^0.20.0",
     "@tailwindcss/postcss": "^4.3.3",
+    "ai": "^7.0.142",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.48.0",
@@ -25,6 +27,8 @@
     "openai": "^7.34.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.7.0",
     "tailwindcss": "^4.3.3",
     "tw-animate-css": "^1.4.0",

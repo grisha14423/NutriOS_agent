@@ -5,6 +5,7 @@ import { z } from "zod";
 import { generateShoppingList } from "../skills/shopping";
 import { suggestWorkoutTemplate, suggestWorkoutTemplateDescription, suggestWorkoutTemplateSchema } from "../skills/workouts";
 import { searchKnowledge } from "../rag/retriever";
+import type { AgentEventHandler } from "../harness/agentEvents";
 
 export type ToolDiagnostics = {
   toolCalls: string[];
@@ -29,7 +30,9 @@ export async function runHealthCoach(
   diagnostics: ToolDiagnostics,
   history: AgentInputItem[],
   mcpServers: MCPServerStdio[],
+  onEvent?: AgentEventHandler,
 ) {
+  const activeToolIds = new Map<string, string[]>();
   const knowledgeTool = tool({
     name: "searchKnowledge",
     description: "Ищи в базе знаний рецепты, правила питания, шаблоны тренировок, правила восстановления. Перед составлением плана найди подходящие материалы.",
@@ -37,12 +40,21 @@ export async function runHealthCoach(
     errorFunction: null,
     execute: async ({ query }) => {
       const startedAt = Date.now();
+      const id = activeToolIds.get("searchKnowledge")?.[0];
+      onEvent?.({ type: "stage", stage: "searching_knowledge", status: "running", query });
+      if (id) onEvent?.({ type: "tool", id, name: "searchKnowledge", source: "knowledge", status: "running", query });
       try {
         const chunks = await searchKnowledge(query);
-        diagnostics.toolEvents.push({ name: "searchKnowledge", source: "knowledge", status: "ok", durationMs: Date.now() - startedAt, query, headings: chunks.map(({ heading }) => heading), matches: chunks.map(({ file, heading }) => ({ file, heading })), chunkCount: chunks.length });
+        const durationMs = Date.now() - startedAt;
+        diagnostics.toolEvents.push({ name: "searchKnowledge", source: "knowledge", status: "ok", durationMs, query, headings: chunks.map(({ heading }) => heading), matches: chunks.map(({ file, heading }) => ({ file, heading })), chunkCount: chunks.length });
+        if (id) onEvent?.({ type: "tool", id, name: "searchKnowledge", source: "knowledge", status: "ok", durationMs, query, chunkCount: chunks.length });
+        onEvent?.({ type: "stage", stage: "searching_knowledge", status: "completed", query });
+        onEvent?.({ type: "stage", stage: "generating_plan", status: "running" });
         return JSON.stringify(chunks);
       } catch (error) {
-        diagnostics.toolEvents.push({ name: "searchKnowledge", source: "knowledge", status: "error", durationMs: Date.now() - startedAt, query, headings: [], matches: [], chunkCount: 0 });
+        const durationMs = Date.now() - startedAt;
+        diagnostics.toolEvents.push({ name: "searchKnowledge", source: "knowledge", status: "error", durationMs, query, headings: [], matches: [], chunkCount: 0 });
+        if (id) onEvent?.({ type: "tool", id, name: "searchKnowledge", source: "knowledge", status: "error", durationMs, query, chunkCount: 0 });
         throw error;
       }
     },
@@ -72,17 +84,26 @@ export async function runHealthCoach(
   };
   const runner = new Runner({ tracingDisabled: true });
   runner.on("agent_tool_start", (_context, _agent, calledTool) => {
-    diagnostics.toolCalls.push(toolLabel(calledTool.name, sourceOf(calledTool.name)));
+    const source = sourceOf(calledTool.name);
+    const id = crypto.randomUUID();
+    activeToolIds.set(calledTool.name, [...(activeToolIds.get(calledTool.name) ?? []), id]);
+    diagnostics.toolCalls.push(toolLabel(calledTool.name, source));
     started.set(calledTool.name, Date.now());
+    onEvent?.({ type: "tool", id, name: calledTool.name, source, status: "running" });
   });
   runner.on("agent_tool_end", (_context, _agent, calledTool, output) => {
+    const id = activeToolIds.get(calledTool.name)?.shift();
     if (calledTool.name === "searchKnowledge") return;
+    const source = sourceOf(calledTool.name);
+    const status = output.startsWith("Error:") ? "error" : "ok";
+    const durationMs = Date.now() - (started.get(calledTool.name) ?? Date.now());
     diagnostics.toolEvents.push({
       name: calledTool.name,
-      source: sourceOf(calledTool.name),
-      status: output.startsWith("Error:") ? "error" : "ok",
-      durationMs: Date.now() - (started.get(calledTool.name) ?? Date.now()),
+      source,
+      status,
+      durationMs,
     });
+    if (id) onEvent?.({ type: "tool", id, name: calledTool.name, source, status, durationMs });
   });
   const result = await runner.run(agent, [...history, { role: "user", content: input }], { maxTurns: 16 });
   if (!result.finalOutput) throw new Error("Health Coach не вернул текстовый план");
@@ -95,25 +116,34 @@ export async function saveApprovedPlan(
   shoppingRequested: boolean,
   diagnostics: ToolDiagnostics,
   mcpServer: MCPServerStdio,
+  onEvent?: AgentEventHandler,
 ) {
   diagnostics.toolCalls.push(toolLabel("save_health_plan", "markdown-health"));
   const saveStartedAt = Date.now();
+  const saveId = crypto.randomUUID();
+  onEvent?.({ type: "tool", id: saveId, name: "save_health_plan", source: "markdown-health", status: "running" });
   try {
     const result = await mcpServer.callToolResult("save_health_plan", { markdown: plan });
     if (result.isError) throw new Error("MCP-сервер не сохранил план");
     diagnostics.toolEvents.push({ name: "save_health_plan", source: "markdown-health", status: "ok", durationMs: Date.now() - saveStartedAt });
+    onEvent?.({ type: "tool", id: saveId, name: "save_health_plan", source: "markdown-health", status: "ok", durationMs: Date.now() - saveStartedAt });
   } catch (error) {
     diagnostics.toolEvents.push({ name: "save_health_plan", source: "markdown-health", status: "error", durationMs: Date.now() - saveStartedAt });
+    onEvent?.({ type: "tool", id: saveId, name: "save_health_plan", source: "markdown-health", status: "error", durationMs: Date.now() - saveStartedAt });
     throw new Error(`Ошибка MCP tool save_health_plan: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (shoppingRequested) {
     diagnostics.toolCalls.push(toolLabel("generateShoppingList", "local"));
     const shoppingStartedAt = Date.now();
+    const shoppingId = crypto.randomUUID();
+    onEvent?.({ type: "tool", id: shoppingId, name: "generateShoppingList", source: "local", status: "running" });
     try {
       await generateShoppingList(plan);
       diagnostics.toolEvents.push({ name: "generateShoppingList", source: "local", status: "ok", durationMs: Date.now() - shoppingStartedAt });
+      onEvent?.({ type: "tool", id: shoppingId, name: "generateShoppingList", source: "local", status: "ok", durationMs: Date.now() - shoppingStartedAt });
     } catch (error) {
       diagnostics.toolEvents.push({ name: "generateShoppingList", source: "local", status: "error", durationMs: Date.now() - shoppingStartedAt });
+      onEvent?.({ type: "tool", id: shoppingId, name: "generateShoppingList", source: "local", status: "error", durationMs: Date.now() - shoppingStartedAt });
       throw new Error(`План сохранён, но список покупок не создан. Ошибка tool generateShoppingList: ${error instanceof Error ? error.message : String(error)}`);
     }
   }

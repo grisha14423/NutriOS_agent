@@ -9,6 +9,7 @@ import { recordRound, type RoundState } from "./rounds";
 import { MIN_SAFE_SCORE, summarizeScore } from "./score";
 import { traceRun } from "./traceRun";
 import type { SafetyReview } from "./validateReview";
+import type { AgentEventHandler } from "./agentEvents";
 
 const medicalRequest =
   /лекар|препарат|табл|капсул|инъекц|укол|доз|давлени|диагноз|лечени|симптом|болезн/i;
@@ -30,11 +31,12 @@ export async function runHealthAgent(
   task: string,
   maxRounds = 3,
   diagnostics: ToolDiagnostics = { toolCalls: [], toolEvents: [] },
+  onEvent?: AgentEventHandler,
 ): Promise<HealthAgentResult> {
   const startedAt = Date.now();
   const progress = { rounds: [] as RoundState[], plan: "" };
   try {
-    return await runHealthAgentCore(task, maxRounds, diagnostics, startedAt, progress);
+    return await runHealthAgentCore(task, maxRounds, diagnostics, startedAt, progress, onEvent);
   } catch (error) {
     try {
       await traceRun(task, process.env.OPENROUTER_MODEL ?? "", {
@@ -66,6 +68,7 @@ async function runHealthAgentCore(
   diagnostics: ToolDiagnostics,
   startedAt: number,
   progress: { rounds: RoundState[]; plan: string },
+  onEvent?: AgentEventHandler,
 ): Promise<HealthAgentResult> {
   const rounds = progress.rounds;
   if (!Number.isInteger(maxRounds) || maxRounds < 1)
@@ -83,11 +86,13 @@ async function runHealthAgentCore(
   }
 
   if (medicalRequest.test(task)) {
+    onEvent?.({ type: "stage", stage: "reviewing_safety", status: "running", round: 1 });
     const review: SafetyReview = {
       verdict: "needs_human_professional",
       score: 0,
       issues: ["Запрос относится к медицинской помощи"],
     };
+    onEvent?.({ type: "stage", stage: "reviewing_safety", status: "completed", round: 1, verdict: review.verdict, score: review.score });
     return finish({
       plan: "",
       review,
@@ -169,7 +174,20 @@ async function runHealthAgentCore(
     durationMs: Date.now() - startedAt,
   });
 
-  let plan = previousPlan ?? await runHealthCoach(client, model, task, coachPrompt, diagnostics, coachHistory, connected);
+  let readingProfile = false;
+  let generatingPlan = false;
+  const onCoachEvent: AgentEventHandler = (event) => {
+    if (event.type === "stage" && event.stage === "searching_knowledge" && event.status === "running" && !readingProfile) {
+      readingProfile = true;
+      onEvent?.({ type: "stage", stage: "reading_profile", status: "completed" });
+    }
+    if (event.type === "stage" && event.stage === "generating_plan" && event.status === "running") generatingPlan = true;
+    onEvent?.(event);
+  };
+  if (!previousPlan) onEvent?.({ type: "stage", stage: "reading_profile", status: "running" });
+  let plan = previousPlan ?? await runHealthCoach(client, model, task, coachPrompt, diagnostics, coachHistory, connected, onCoachEvent);
+  if (!previousPlan && !readingProfile) onEvent?.({ type: "stage", stage: "reading_profile", status: "completed" });
+  if (generatingPlan) onEvent?.({ type: "stage", stage: "generating_plan", status: "completed" });
   progress.plan = plan;
   if (!previousPlan && !diagnostics.toolEvents.some((event) =>
     event.name === "searchKnowledge" && event.status === "ok" && (event.chunkCount ?? 0) > 0))
@@ -181,6 +199,7 @@ async function runHealthAgentCore(
   };
 
   for (let round = 1; round <= maxRounds; round++) {
+    onEvent?.({ type: "stage", stage: "reviewing_safety", status: "running", round });
     review = await runSafetyReviewer(
       client,
       model,
@@ -200,16 +219,19 @@ async function runHealthAgentCore(
       issuesCount: review.issues.length,
     });
     recordRound(rounds, round, plan, review);
+    onEvent?.({ type: "stage", stage: "reviewing_safety", status: "completed", round, verdict: review.verdict, score: review.score });
 
     if (review.verdict === "needs_human_professional") {
       return finish(result("", review), rounds);
     }
     if (review.verdict === "approve") {
       // Основной план в data/output.md сохраняет только harness после approve и порога score.
-      if (mcpServer) await saveApprovedPlan(plan, shoppingRequested, diagnostics, mcpServer);
+      if (mcpServer) await saveApprovedPlan(plan, shoppingRequested, diagnostics, mcpServer, onEvent);
+      onEvent?.({ type: "stage", stage: "final_approved_plan", status: "completed", round, verdict: review.verdict, score: review.score });
       return finish(result(plan, review), rounds);
     }
     if (round < maxRounds) {
+      onEvent?.({ type: "stage", stage: "revising", status: "running", round: round + 1 });
       plan = await runHealthCoach(
         client,
         model,
@@ -218,8 +240,13 @@ async function runHealthAgentCore(
         diagnostics,
         coachHistory,
         connected,
+        (event) => {
+          if (event.type === "stage" && event.stage === "generating_plan") return;
+          onEvent?.(event);
+        },
       );
       progress.plan = plan;
+      onEvent?.({ type: "stage", stage: "revising", status: "completed", round: round + 1 });
     }
   }
 

@@ -1,364 +1,306 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   AlertCircle,
   ArrowUp,
-  CheckCircle2,
-  ChevronDown,
+  BookOpen,
+  Check,
+  ChefHat,
+  CloudSun,
+  Database,
+  Dumbbell,
+  FilePenLine,
+  FileText,
+  FolderOpen,
   HeartPulse,
   LoaderCircle,
+  NotebookPen,
+  NotebookTabs,
+  Plug,
+  RotateCcw,
+  Save,
+  Search,
   ShieldCheck,
-  Sparkles,
+  ShoppingBasket,
+  SquarePen,
+  UserRound,
+  Wrench,
+  type LucideIcon,
 } from "lucide-react";
-import { Alert } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Textarea } from "@/components/ui/textarea";
-import { cn } from "@/lib/utils";
+import type { AgentEvent, AgentStage } from "@/src/harness/agentEvents";
+import type { ChatRunResult, HealthChatMessage } from "@/src/harness/chatMessage";
 
-type AgentResult = {
-  plan: string;
-  review: Review;
-  blockedReason: string | null;
-  rounds: { round: number; plan: string; review: Review }[];
-  toolCalls: string[];
-  toolEvents: ToolDiagnostics["toolEvents"];
-  finalScore: number | null;
-  improved: boolean;
-  promptVersions: { coach: string; reviewer: string };
-  durationMs: number;
-};
-
-type ToolDiagnostics = {
-  toolCalls: string[];
-  toolEvents: { name: string; source: string; status: "ok" | "error"; durationMs: number; query?: string; chunkCount?: number }[];
-};
-
-type Review = {
-  verdict: "approve" | "revise" | "needs_human_professional";
-  score: number;
-  issues: string[];
+const stageLabels: Record<AgentStage, string> = {
+  reading_profile: "Reading profile",
+  searching_knowledge: "Searching knowledge",
+  generating_plan: "Generating plan",
+  reviewing_safety: "Reviewing safety",
+  revising: "Revising",
+  final_approved_plan: "Final approved plan",
 };
 
 const verdictLabels = {
   approve: "Одобрено",
   revise: "Нужна доработка",
-  needs_human_professional: "Нужна консультация",
+  needs_human_professional: "Требуется специалист",
 };
 
-function ToolEventsList({ events }: { events: ToolDiagnostics["toolEvents"] }) {
+const transport = new DefaultChatTransport<HealthChatMessage>({ api: "/api/chat" });
+
+const toolIcons: Record<string, LucideIcon> = {
+  read_profile: UserRound,
+  read_recent_logs: NotebookPen,
+  append_daily_log: SquarePen,
+  list_recipes: ChefHat,
+  searchKnowledge: BookOpen,
+  suggestWorkoutTemplate: Dumbbell,
+  save_health_plan: Save,
+  generateShoppingList: ShoppingBasket,
+  get_weather_forecast: CloudSun,
+};
+
+function iconForTool(name: string, source: string): LucideIcon {
+  if (toolIcons[name]) return toolIcons[name];
+  if (source === "weather") return CloudSun;
+  if (source === "notion") return NotebookTabs;
+  if (/search/i.test(name)) return Search;
+  if (/write|edit|update/i.test(name)) return FilePenLine;
+  if (/list|directory|folder/i.test(name)) return FolderOpen;
+  if (/read|file/i.test(name)) return FileText;
+  return source === "knowledge" ? Database : source === "local" ? Wrench : Plug;
+}
+
+function timelineFor(message: HealthChatMessage, failed: boolean) {
+  const entries = new Map<string, AgentEvent>();
+  for (const part of message.parts) {
+    if (part.type !== "data-event") continue;
+    const event = part.data;
+    const key = event.type === "stage"
+      ? `stage:${event.stage}:${event.round ?? 0}`
+      : `tool:${event.id}`;
+    entries.set(key, event);
+  }
+  return [...entries.entries()].filter(([, event]) => !failed || event.status !== "running");
+}
+
+function resultFor(message: HealthChatMessage): ChatRunResult | undefined {
+  return message.parts.find((part) => part.type === "data-result")?.data;
+}
+
+function sourceKind(source: string) {
+  if (source === "knowledge") return "rag";
+  if (source === "local") return "local";
+  return "mcp";
+}
+
+function Timeline({ message, failed }: { message: HealthChatMessage; failed: boolean }) {
+  const entries = timelineFor(message, failed);
+  if (!entries.length) return null;
+
   return (
-    <ol className="space-y-2.5">
-      {events.map(({ name, source, status, durationMs, query, chunkCount }, index) => (
-        <li key={`${index}-${name}`} className="flex flex-wrap items-center gap-3 rounded-lg border bg-secondary/30 p-3 sm:flex-nowrap sm:p-4">
-          <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full bg-card text-sm font-semibold text-primary shadow-sm ring-1 ring-border">
-            {index + 1}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="break-all text-sm font-semibold text-foreground">
-                {source === "knowledge" ? <>🔍 knowledge: {query} → {chunkCount ?? 0} chunks</> : name}
+    <ol className="timeline" aria-label="Этапы работы агента">
+      {entries.map(([key, event]) => {
+        if (event.type === "stage") {
+          const running = event.status === "running";
+          return (
+            <li key={key} className={`timeline-row${running ? " is-running" : ""}`}>
+              <span className="timeline-icon" aria-hidden="true">
+                {running ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}
               </span>
-              <Badge className={source !== "local" ? "border-primary/20 bg-primary/10 text-primary" : "border-border bg-card text-secondary-foreground"}>
-                [{source}]
-              </Badge>
+              <div className="timeline-copy">
+                <span className="timeline-title">
+                  {stageLabels[event.stage]}
+                  {event.stage === "revising" && event.round ? ` (round ${event.round})` : ""}
+                </span>
+                {event.query && <span className="timeline-detail">Запрос: {event.query}</span>}
+                {event.verdict && (
+                  <span className="timeline-detail">
+                    {verdictLabels[event.verdict]}{event.score !== undefined ? `, ${event.score}/10` : ""}
+                  </span>
+                )}
+              </div>
+            </li>
+          );
+        }
+
+        const kind = sourceKind(event.source);
+        const Icon = iconForTool(event.name, event.source);
+        return (
+          <li key={key} className={`timeline-row tool-row${event.status === "running" ? " is-running" : ""}`}>
+            <span className="timeline-icon" aria-hidden="true"><Icon size={15} /></span>
+            <div className="timeline-copy">
+              <span className="timeline-title"><span className="source-tag">[{kind}]</span> {event.name}</span>
+              {event.query && <span className="timeline-detail">{event.query}</span>}
             </div>
-            <div className={`mt-1 flex items-center gap-1.5 text-sm ${status === "ok" ? "text-primary" : "text-destructive"}`}>
-              {status === "ok" ? <CheckCircle2 aria-hidden="true" className="size-3.5" /> : <AlertCircle aria-hidden="true" className="size-3.5" />}
-              <span>{status === "ok" ? "Выполнен" : "Ошибка"}</span>
-            </div>
-          </div>
-          <span className="ml-11 text-xs tabular-nums text-muted-foreground sm:ml-0 sm:text-sm">{durationMs} мс</span>
-        </li>
-      ))}
+            <span className={`tool-status ${event.status === "error" ? "tool-error" : ""}`}>
+              {event.status === "running" ? "В работе" : event.status === "ok" ? "Готово" : "Ошибка"}
+            </span>
+          </li>
+        );
+      })}
     </ol>
   );
 }
 
-export default function Home() {
-  const [task, setTask] = useState("");
-  const [status, setStatus] = useState<"idle" | "running" | "result">("idle");
-  const [result, setResult] = useState<AgentResult | null>(null);
-  const [error, setError] = useState("");
-  const [errorDiagnostics, setErrorDiagnostics] = useState<ToolDiagnostics | null>(null);
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!task.trim()) return;
-
-    setStatus("running");
-    setResult(null);
-    setError("");
-    setErrorDiagnostics(null);
-
-    try {
-      const response = await fetch("/api/agent/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ task }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setErrorDiagnostics({
-          toolCalls: Array.isArray(data.toolCalls) ? data.toolCalls : [],
-          toolEvents: Array.isArray(data.toolEvents) ? data.toolEvents : [],
-        });
-        throw new Error(data.error || "Не удалось запустить агента");
-      }
-      setResult(data);
-    } catch (requestError) {
-      setError(
-        requestError instanceof Error ? requestError.message : "Ошибка запуска агента",
-      );
-    } finally {
-      setStatus("result");
-    }
-  }
-
+function AssistantMessage({ message, transportFailed }: { message: HealthChatMessage; transportFailed: boolean }) {
+  const plan = message.parts.filter((part) => part.type === "text").map((part) => part.text).join("");
+  const result = resultFor(message);
+  const failure = message.parts.find((part) => part.type === "data-failure")?.data;
+  const failed = Boolean(failure) || transportFailed;
   const needsProfessional = result?.review.verdict === "needs_human_professional";
 
   return (
-    <main id="main-content" className="min-h-dvh bg-background px-4 py-8 sm:px-6 sm:py-12">
-      <div className="mx-auto max-w-3xl">
-        <header className="mb-8 flex items-start gap-4 sm:mb-10">
-          <div className="flex size-12 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
-            <HeartPulse aria-hidden="true" className="size-6" />
-          </div>
+    <article className="assistant-message" aria-label="Ответ Health Coach">
+      <div className="assistant-heading"><ShieldCheck size={17} aria-hidden="true" /> Health Coach</div>
+      <Timeline message={message} failed={failed} />
+
+      {needsProfessional && result && (
+        <section className="notice notice-amber" aria-labelledby={`professional-${message.id}`}>
+          <AlertCircle size={20} aria-hidden="true" />
           <div>
-            <p className="mb-1 text-sm font-semibold text-primary">Персональный wellness-помощник</p>
-            <h1 className="text-balance text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
-              Health Coach Agent
-            </h1>
-            <p className="mt-2 max-w-xl text-base leading-7 text-muted-foreground">
-              Составляет реалистичный план и проверяет его безопасность перед выдачей.
-            </p>
-          </div>
-        </header>
-
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2 text-sm font-semibold text-primary">
-              <Sparkles aria-hidden="true" className="size-4" />
-              Новая задача
-            </div>
-            <h2 className="text-xl font-semibold tracking-tight">Что вы хотите улучшить?</h2>
-            <p className="text-sm leading-6 text-muted-foreground">
-              Опишите цель на день или привычку. Агент работает только с wellness-рекомендациями.
-            </p>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={submit} className="space-y-4">
-              <div className="space-y-2">
-                <label htmlFor="task" className="text-sm font-medium text-foreground">
-                  Ваша задача
-                </label>
-                <div className="flex items-end gap-2">
-                  <Textarea
-                    id="task"
-                    rows={1}
-                    value={task}
-                    onChange={(event) => {
-                      const field = event.currentTarget;
-                      field.style.height = "auto";
-                      field.style.height = `${field.scrollHeight}px`;
-                      setTask(field.value);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                        event.preventDefault();
-                        event.currentTarget.form?.requestSubmit();
-                      }
-                    }}
-                    placeholder="Например: составь план питания и активности на день"
-                    aria-describedby="task-hint"
-                    disabled={status === "running"}
-                    className={cn("min-h-11 max-h-48 min-w-0 flex-1 resize-none overflow-y-auto rounded-2xl px-4 py-2.5")}
-                  />
-                  <Button type="submit" aria-label={status === "running" ? "Агент работает" : "Отправить запрос"} disabled={status === "running" || !task.trim()} className="size-11 shrink-0 rounded-full p-0">
-                    {status === "running" ? <LoaderCircle aria-hidden="true" className="size-5 animate-spin" /> : <ArrowUp aria-hidden="true" className="size-5" />}
-                  </Button>
-                </div>
-                <p id="task-hint" className="text-sm text-muted-foreground">
-                  Enter отправляет запрос, Shift+Enter переносит строку. Не указывайте симптомы, диагнозы, лечение или лекарства.
-                </p>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-
-        <div className="mt-6" aria-live="polite">
-          {status === "running" && (
-            <Card className="border-primary/20 bg-primary/5">
-              <CardContent className="flex items-center gap-3 p-5 text-sm text-foreground">
-                <LoaderCircle aria-hidden="true" className="size-5 animate-spin text-primary" />
-                Агент готовит план и выполняет safety review. Это может занять некоторое время.
-              </CardContent>
-            </Card>
-          )}
-
-          {error && (
-            <Alert className="flex gap-3 border-destructive/30 bg-destructive/5 text-foreground">
-              <AlertCircle aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-destructive" />
-              <div>
-                <p className="font-semibold">Не удалось выполнить задачу</p>
-                <p className="mt-1 text-sm leading-6">{error}</p>
-                {errorDiagnostics && errorDiagnostics.toolEvents.length > 0 && (
-                  <div className="mt-4"><ToolEventsList events={errorDiagnostics.toolEvents} /></div>
-                )}
-              </div>
-            </Alert>
-          )}
-
-          <div className="space-y-3">
-            {needsProfessional && result && (
-              <Alert className="flex gap-3 border-amber-700/30 bg-amber-50 text-amber-950">
-                <AlertCircle aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-amber-700" />
-                <div>
-                  <p className="font-semibold">Для этого запроса требуется вмешательство человека</p>
-                  <p className="mt-1 text-sm leading-6">
-                    Агент не показывает план для запросов, связанных с медицинской помощью.
-                  </p>
-                </div>
-              </Alert>
-            )}
-
-            {result?.blockedReason && (
-              <Alert className="flex gap-3 border-amber-700/30 bg-amber-50 text-amber-950">
-                <AlertCircle aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-amber-700" />
-                <div>
-                  <p className="font-semibold">План не выдан</p>
-                  <p className="mt-1 text-sm leading-6">{result.blockedReason}</p>
-                </div>
-              </Alert>
+            <h2 id={`professional-${message.id}`}>Требуется специалист</h2>
+            <p>По этому запросу план не выдаётся.</p>
+            {result.review.issues.length > 0 && (
+              <ul>{result.review.issues.map((issue, index) => <li key={index}>{issue}</li>)}</ul>
             )}
           </div>
+        </section>
+      )}
 
-          {result && (
-            <section className="mt-8 space-y-6" aria-labelledby="result-title">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <p className="text-sm font-semibold text-primary">Результат</p>
-                  <h2 id="result-title" className="text-2xl font-bold tracking-tight">Safety review</h2>
-                </div>
-                <Badge
-                  className={
-                    needsProfessional || result.blockedReason
-                      ? "border-amber-700/30 bg-amber-50 text-amber-900"
-                      : result.review.verdict === "approve"
-                        ? "border-primary/20 bg-primary/10 text-primary"
-                        : "border-border bg-secondary text-secondary-foreground"
-                  }
-                >
-                  {result.plan ? (
-                    <CheckCircle2 aria-hidden="true" className="mr-1.5 size-3.5" />
-                  ) : (
-                    <ShieldCheck aria-hidden="true" className="mr-1.5 size-3.5" />
-                  )}
-                  {result.blockedReason ? "План не выдан" : verdictLabels[result.review.verdict]}
-                </Badge>
-              </div>
+      {result?.blockedReason && !needsProfessional && (
+        <section className="notice notice-amber">
+          <AlertCircle size={20} aria-hidden="true" />
+          <div>
+            <h2>План не выдан</h2>
+            <p>{result.blockedReason}</p>
+            {result.review.issues.length > 0 && (
+              <ul>{result.review.issues.map((issue, index) => <li key={index}>{issue}</li>)}</ul>
+            )}
+          </div>
+        </section>
+      )}
 
-              {result.plan && (
-                <Card>
-                  <CardHeader>
-                    <h3 className="text-lg font-semibold">Финальный план</h3>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="whitespace-pre-wrap break-words text-base leading-7 text-foreground">
-                      {result.plan}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
+      {plan && <div className="plan-text"><ReactMarkdown remarkPlugins={[remarkGfm]}>{plan}</ReactMarkdown></div>}
 
-              <Card>
-                <CardHeader>
-                  <h3 className="text-lg font-semibold">Что сделал агент</h3>
-                  <p className="text-sm text-muted-foreground">Источники данных и локальные действия по порядку выполнения.</p>
-                </CardHeader>
-                <CardContent>
-                  {result.toolEvents.length ? (
-                    <ToolEventsList events={result.toolEvents} />
-                  ) : (
-                    <p className="text-sm text-muted-foreground">Tools не вызывались.</p>
-                  )}
-                </CardContent>
-              </Card>
-
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Card>
-                  <CardContent className="p-5">
-                    <p className="text-sm text-muted-foreground">Оценка безопасности</p>
-                    <p className="mt-1 text-3xl font-bold tracking-tight text-foreground">
-                      {result.review.score}<span className="text-lg font-medium text-muted-foreground">/10</span>
-                    </p>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardContent className="p-5">
-                    <p className="text-sm text-muted-foreground">Раундов проверки</p>
-                    <p className="mt-1 text-3xl font-bold tracking-tight text-foreground">{result.rounds.length}</p>
-                  </CardContent>
-                </Card>
-              </div>
-
-              <Card>
-                <CardContent className="space-y-3 p-5 text-sm text-muted-foreground">
-                  <p>Время выполнения: {result.durationMs} мс</p>
-                  <p>Версии промптов: coach {result.promptVersions.coach}, reviewer {result.promptVersions.reviewer}</p>
-                  <details className="group border-t pt-3">
-                    <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
-                      <span>История раундов <span className="ml-1 text-muted-foreground">({result.rounds.length})</span></span>
-                      <ChevronDown aria-hidden="true" className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
-                    </summary>
-                    <ol className="mt-3 space-y-2.5 text-foreground">
-                      {result.rounds.map(({ round, review }) => (
-                        <li key={round} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-card p-3 sm:p-4">
-                          <div className="flex items-center gap-3">
-                            <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full bg-secondary text-sm font-semibold text-secondary-foreground">{round}</span>
-                            <span className="font-medium">Раунд {round}</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Badge className={review.verdict === "approve" ? "border-primary/20 bg-primary/10 text-primary" : "border-amber-700/30 bg-amber-50 text-amber-900"}>
-                              {verdictLabels[review.verdict]}
-                            </Badge>
-                            <span className="min-w-10 text-right font-semibold tabular-nums text-foreground">{review.score}/10</span>
-                          </div>
-                        </li>
-                      ))}
-                    </ol>
-                  </details>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <h3 className="text-lg font-semibold">Замечания</h3>
-                  <p className="text-sm text-muted-foreground">Вывод Safety Reviewer по финальному раунду.</p>
-                </CardHeader>
-                <CardContent>
-                  {result.review.issues.length ? (
-                    <ul className="space-y-2.5 text-sm leading-6 text-foreground">
-                      {result.review.issues.map((issue, index) => (
-                        <li key={`${index}-${issue}`} className="flex gap-3 rounded-lg border border-amber-700/20 bg-amber-50/60 p-3 sm:p-4">
-                          <span aria-hidden="true" className="flex size-6 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xs font-semibold text-amber-900">{index + 1}</span>
-                          <span className="min-w-0 break-words">{issue}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className={`flex items-center gap-2.5 rounded-lg border p-4 text-sm leading-6 ${result.blockedReason ? "bg-secondary/40 text-muted-foreground" : "border-primary/20 bg-primary/5 text-primary"}`}>
-                      {!result.blockedReason && <CheckCircle2 aria-hidden="true" className="size-4 shrink-0" />}
-                      <span>{result.blockedReason ? "Reviewer не указал конкретных замечаний." : "Замечаний нет."}</span>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </section>
-          )}
+      {failure && (
+        <div className="notice notice-error" role="alert">
+          <AlertCircle size={20} aria-hidden="true" />
+          <div><h2>Не удалось выполнить задачу</h2><p>{failure.message}</p></div>
         </div>
+      )}
+
+      {result && (
+        <div className="review-footer">
+          <span>Safety review: <strong>{verdictLabels[result.review.verdict]}</strong></span>
+          <span>Оценка: <strong>{result.review.score}/10</strong></span>
+          <span>{result.roundCount} {result.roundCount === 1 ? "раунд" : "раундов"}</span>
+        </div>
+      )}
+    </article>
+  );
+}
+
+export default function Home() {
+  const [draft, setDraft] = useState("");
+  const { messages, sendMessage, status, error, setMessages, clearError } = useChat<HealthChatMessage>({ transport });
+  const logRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const busy = status === "submitted" || status === "streaming";
+  const latestMessage = messages.at(-1);
+  const hasFailure = latestMessage?.parts.some((part) => part.type === "data-failure");
+
+  useEffect(() => {
+    const log = logRef.current;
+    if (log) log.scrollTop = log.scrollHeight;
+  }, [messages]);
+
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+  }, [draft]);
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const text = draft.trim();
+    if (!text || busy) return;
+    setDraft("");
+    void sendMessage({ text });
+  }
+
+  function resetSession() {
+    setMessages([]);
+    setDraft("");
+    clearError();
+  }
+
+  return (
+    <main id="main-content" className="chat-shell">
+      <header className="chat-header">
+        <div className="brand-mark"><HeartPulse size={22} aria-hidden="true" /></div>
+        <div>
+          <p className="brand-kicker">Персональный wellness-помощник</p>
+          <h1>Health Coach Agent</h1>
+        </div>
+        <button className="new-session-button" type="button" onClick={resetSession} disabled={busy} title={busy ? "Дождитесь завершения задачи" : undefined}>
+          <RotateCcw size={16} aria-hidden="true" /> Новая сессия
+        </button>
+      </header>
+
+      <div className="chat-log" ref={logRef} role="log" aria-live="polite" aria-relevant="additions text">
+        {messages.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-mark"><HeartPulse size={28} aria-hidden="true" /></div>
+            <h2>С чего начнём?</h2>
+            <p>Опишите цель на день или привычку. Коуч подготовит план и проверит его безопасность перед ответом.</p>
+          </div>
+        ) : (
+          <div className="chat-messages">
+            {messages.map((message) => message.role === "user" ? (
+              <div key={message.id} className="user-message">
+                {message.parts.filter((part) => part.type === "text").map((part) => part.text).join("")}
+              </div>
+            ) : message.role === "assistant" ? (
+              <AssistantMessage key={message.id} message={message} transportFailed={Boolean(error) && latestMessage?.id === message.id} />
+            ) : null)}
+            {status === "submitted" && <p className="waiting-line"><LoaderCircle className="spin" size={16} aria-hidden="true" /> Запускаем агента...</p>}
+            {error && <p className="request-error" role="alert">Ошибка соединения: {error.message}</p>}
+          </div>
+        )}
+      </div>
+
+      <div className="composer-wrap">
+        <form className="composer" onSubmit={submit}>
+          <label htmlFor="chat-input">Ваше сообщение</label>
+          <div className="composer-row">
+            <textarea
+              id="chat-input"
+              ref={inputRef}
+              rows={1}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+              placeholder="Например: составь план питания и активности на день"
+              disabled={busy}
+              aria-describedby="chat-hint"
+            />
+            <button type="submit" disabled={busy || !draft.trim()} aria-label={busy ? "Агент работает" : "Отправить сообщение"}>
+              {busy && !hasFailure ? <LoaderCircle className="spin" size={20} aria-hidden="true" /> : <ArrowUp size={20} aria-hidden="true" />}
+            </button>
+          </div>
+          <p id="chat-hint">Enter отправляет, Shift+Enter переносит строку. Чат хранится только на этой странице.</p>
+        </form>
       </div>
     </main>
   );
