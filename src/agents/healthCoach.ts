@@ -1,1 +1,1 @@
-﻿export { runHealthCoach, saveApprovedPlan } from "./healthCoachTools";
+﻿export { runHealthCoach, saveApprovedPlan } from "./healthCoachMcp";

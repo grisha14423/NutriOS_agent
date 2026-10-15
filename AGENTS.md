@@ -34,8 +34,9 @@ npm run start
 - `src/harness/promptVersions.ts`: активные версии и загрузка промптов из `prompts/`.
 - `src/harness/traceRun.ts`: запись локального JSON-трейса результата или ошибки запуска в `runs/`.
 - `src/agents/healthCoach.ts` и `src/agents/safetyReviewer.ts`: вызовы агентов.
-- `src/agents/healthCoachTools.ts`: function calling коуча, история вызовов и результаты tools.
-- `src/skills/`: tools для выборочного чтения профиля, дневника и рецептов, шаблона тренировки и сохранения результатов.
+- `src/agents/healthCoachMcp.ts`: Health Coach на OpenAI Agents SDK, MCP tools, история вызовов и диагностика.
+- `src/mcp/markdownHealthServer.ts`: локальный stdio-сервер с tools и resources для Markdown-данных.
+- `src/skills/`: локальные tools для шаблона тренировки и списка покупок. Старые модули данных имеют суффикс `-UNUSED.ts` и не подключены к агенту.
 - `data/profile.md` и `data/log.md`: данные, доступные коучу через tools.
 - `data/output.md`: сохранённый одобренный план.
 - `scripts/replay.ts`: повторный запуск задачи из трейса и сравнение результатов.
@@ -43,13 +44,13 @@ npm run start
 
 ## Агентный flow
 
-1. Health Coach сам запрашивает нужные данные через function calling OpenRouter Responses API.
+1. Harness запускает stdio MCP-сервер на время запроса. Health Coach получает tools сервера через OpenAI Agents SDK и запрашивает нужные данные.
 2. Health Coach создаёт план.
 3. Safety Reviewer получает только текст плана и не имеет tools.
 4. При `revise` coach получает замечания и переписывает план. Всего не более трёх раундов.
-5. При `approve` и оценке не ниже 7/10 harness вызывает savePlan с одобренным текстом, затем при запросе списка покупок generateShoppingList. Вызовы попадают в `toolCalls` и UI.
+5. При `approve` и оценке не ниже 7/10 harness вызывает MCP tool `save_health_plan` с одобренным текстом, затем при запросе списка покупок локальный `generateShoppingList`. Вызовы попадают в `toolCalls` и UI.
 6. При низкой оценке, отсутствии одобрения после всех раундов или `needs_human_professional` план не возвращается в UI.
-7. Запрос списка покупок к существующему плану читает `data/output.md`; запрос нового плана со списком покупок сначала создаёт и проверяет новый план.
+7. Запрос списка покупок к существующему плану читает resource `plans://latest`; запрос нового плана со списком покупок сначала создаёт и проверяет новый план.
 
 Не меняйте промпты, medical regex, `store: false` или правила revision loop без явного запроса.
 OpenRouter stateless: история вызовов tools и результатов передаётся между раундами до завершения запроса, `previous_response_id` не используется. Профиль и дневник целиком не добавляются в начальный промпт.

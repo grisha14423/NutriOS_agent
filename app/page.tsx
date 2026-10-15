@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import {
   AlertCircle,
   CheckCircle2,
+  ChevronDown,
   HeartPulse,
   LoaderCircle,
   ShieldCheck,
@@ -30,7 +31,7 @@ type AgentResult = {
 
 type ToolDiagnostics = {
   toolCalls: string[];
-  toolEvents: { name: string; status: "ok" | "error"; durationMs: number }[];
+  toolEvents: { name: string; source: "mcp" | "tool"; status: "ok" | "error"; durationMs: number }[];
 };
 
 type Review = {
@@ -44,6 +45,33 @@ const verdictLabels = {
   revise: "Нужна доработка",
   needs_human_professional: "Нужна консультация",
 };
+
+function ToolEventsList({ events }: { events: ToolDiagnostics["toolEvents"] }) {
+  return (
+    <ol className="space-y-2.5">
+      {events.map(({ name, source, status, durationMs }, index) => (
+        <li key={`${index}-${name}`} className="flex flex-wrap items-center gap-3 rounded-lg border bg-secondary/30 p-3 sm:flex-nowrap sm:p-4">
+          <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full bg-card text-sm font-semibold text-primary shadow-sm ring-1 ring-border">
+            {index + 1}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="break-all text-sm font-semibold text-foreground">{name}</span>
+              <Badge className={source === "mcp" ? "border-primary/20 bg-primary/10 text-primary" : "border-border bg-card text-secondary-foreground"}>
+                {source}
+              </Badge>
+            </div>
+            <div className={`mt-1 flex items-center gap-1.5 text-sm ${status === "ok" ? "text-primary" : "text-destructive"}`}>
+              {status === "ok" ? <CheckCircle2 aria-hidden="true" className="size-3.5" /> : <AlertCircle aria-hidden="true" className="size-3.5" />}
+              <span>{status === "ok" ? "Выполнен" : "Ошибка"}</span>
+            </div>
+          </div>
+          <span className="ml-11 text-xs tabular-nums text-muted-foreground sm:ml-0 sm:text-sm">{durationMs} мс</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
 
 export default function Home() {
   const [task, setTask] = useState("");
@@ -168,13 +196,7 @@ export default function Home() {
                 <p className="font-semibold">Не удалось выполнить задачу</p>
                 <p className="mt-1 text-sm leading-6">{error}</p>
                 {errorDiagnostics && errorDiagnostics.toolEvents.length > 0 && (
-                  <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm">
-                    {errorDiagnostics.toolEvents.map(({ name, status, durationMs }, index) => (
-                      <li key={`${index}-${name}`}>
-                        {name}: {status === "ok" ? "выполнен" : "ошибка"}, {durationMs} мс
-                      </li>
-                    ))}
-                  </ol>
+                  <div className="mt-4"><ToolEventsList events={errorDiagnostics.toolEvents} /></div>
                 )}
               </div>
             </Alert>
@@ -245,16 +267,11 @@ export default function Home() {
               <Card>
                 <CardHeader>
                   <h3 className="text-lg font-semibold">Что сделал агент</h3>
+                  <p className="text-sm text-muted-foreground">Источники данных и локальные действия по порядку выполнения.</p>
                 </CardHeader>
                 <CardContent>
                   {result.toolEvents.length ? (
-                    <ol className="list-decimal space-y-1 pl-5 text-sm text-foreground">
-                      {result.toolEvents.map(({ name, status, durationMs }, index) => (
-                        <li key={`${index}-${name}`}>
-                          {name}: {status === "ok" ? "выполнен" : "ошибка"}, {durationMs} мс
-                        </li>
-                      ))}
-                    </ol>
+                    <ToolEventsList events={result.toolEvents} />
                   ) : (
                     <p className="text-sm text-muted-foreground">Tools не вызывались.</p>
                   )}
@@ -282,14 +299,24 @@ export default function Home() {
                 <CardContent className="space-y-3 p-5 text-sm text-muted-foreground">
                   <p>Время выполнения: {result.durationMs} мс</p>
                   <p>Версии промптов: coach {result.promptVersions.coach}, reviewer {result.promptVersions.reviewer}</p>
-                  <details>
-                    <summary className="w-fit cursor-pointer rounded-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                      История раундов
+                  <details className="group border-t pt-3">
+                    <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+                      <span>История раундов <span className="ml-1 text-muted-foreground">({result.rounds.length})</span></span>
+                      <ChevronDown aria-hidden="true" className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
                     </summary>
-                    <ol className="mt-3 space-y-2 pl-5 text-foreground">
+                    <ol className="mt-3 space-y-2.5 text-foreground">
                       {result.rounds.map(({ round, review }) => (
-                        <li key={round}>
-                          Раунд {round} - {verdictLabels[review.verdict]} - {review.score}/10
+                        <li key={round} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-card p-3 sm:p-4">
+                          <div className="flex items-center gap-3">
+                            <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full bg-secondary text-sm font-semibold text-secondary-foreground">{round}</span>
+                            <span className="font-medium">Раунд {round}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge className={review.verdict === "approve" ? "border-primary/20 bg-primary/10 text-primary" : "border-amber-700/30 bg-amber-50 text-amber-900"}>
+                              {verdictLabels[review.verdict]}
+                            </Badge>
+                            <span className="min-w-10 text-right font-semibold tabular-nums text-foreground">{review.score}/10</span>
+                          </div>
                         </li>
                       ))}
                     </ol>
@@ -300,21 +327,23 @@ export default function Home() {
               <Card>
                 <CardHeader>
                   <h3 className="text-lg font-semibold">Замечания</h3>
+                  <p className="text-sm text-muted-foreground">Вывод Safety Reviewer по финальному раунду.</p>
                 </CardHeader>
                 <CardContent>
                   {result.review.issues.length ? (
-                    <ul className="space-y-3 text-sm leading-6 text-foreground">
-                      {result.review.issues.map((issue) => (
-                        <li key={issue} className="flex gap-3">
-                          <span aria-hidden="true" className="mt-2 size-1.5 shrink-0 rounded-full bg-primary" />
-                          <span>{issue}</span>
+                    <ul className="space-y-2.5 text-sm leading-6 text-foreground">
+                      {result.review.issues.map((issue, index) => (
+                        <li key={`${index}-${issue}`} className="flex gap-3 rounded-lg border border-amber-700/20 bg-amber-50/60 p-3 sm:p-4">
+                          <span aria-hidden="true" className="flex size-6 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xs font-semibold text-amber-900">{index + 1}</span>
+                          <span className="min-w-0 break-words">{issue}</span>
                         </li>
                       ))}
                     </ul>
                   ) : (
-                    <p className="text-sm leading-6 text-muted-foreground">
-                      {result.blockedReason ? "Reviewer не указал конкретных замечаний." : "Замечаний нет."}
-                    </p>
+                    <div className={`flex items-center gap-2.5 rounded-lg border p-4 text-sm leading-6 ${result.blockedReason ? "bg-secondary/40 text-muted-foreground" : "border-primary/20 bg-primary/5 text-primary"}`}>
+                      {!result.blockedReason && <CheckCircle2 aria-hidden="true" className="size-4 shrink-0" />}
+                      <span>{result.blockedReason ? "Reviewer не указал конкретных замечаний." : "Замечаний нет."}</span>
+                    </div>
                   )}
                 </CardContent>
               </Card>

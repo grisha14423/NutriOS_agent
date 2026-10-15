@@ -31,7 +31,8 @@ async function main() {
 
     try {
       const result = await runHealthAgent(evalCase.task);
-      const missingTools = (evalCase.expect.requiredToolCalls ?? []).filter((tool) => !result.toolCalls.includes(tool));
+      const missingTools = (evalCase.expect.requiredToolCalls ?? []).filter((tool) =>
+        !result.toolCalls.some((call) => call.replace(/ \((mcp|tool)\)$/, "") === (tool === "savePlan" ? "save_health_plan" : tool)));
       const stopped = !evalCase.expect.stopBeforeModel ||
         (result.plan === "" && result.rounds.length === 0 && result.toolCalls.length === 0 && result.blockedReason !== null);
       const passed = result.review.verdict === evalCase.expect.verdict &&
